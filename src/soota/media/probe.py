@@ -10,6 +10,7 @@ from typing import Any
 
 from soota.errors import InputError, SourceError
 from soota.media.models import MediaAsset, MediaKind, MediaStream, MediaVerification, positive_number
+from soota.platform_support import WINDOWS
 from soota.providers.process import ProcessResult, run_process
 
 IMAGE_CODECS = {"png": "png", "mjpeg": "jpg", "jpeg2000": "jp2", "webp": "webp", "gif": "gif", "bmp": "bmp"}
@@ -21,6 +22,14 @@ def command(
 ) -> ProcessResult:
     """Do not expose argv, stderr, or raw exception messages: they may contain signed URLs."""
     if limit_file_bytes is not None:
+        if type(limit_file_bytes) is not int or limit_file_bytes <= 0:
+            raise InputError("媒体字节上限必须是正整数。")
+        if WINDOWS:
+            raise SourceError(
+                "Windows 暂不能为外部媒体工具提供硬文件字节上限，未启动下载或转换。",
+                hint="可读取已有媒体或直接 HTTP 文件；需要外部下载/转换时请使用 macOS/Linux。",
+                details={"reason": "file_limit_unavailable", "dispatched": False},
+            )
         # The inherited OS limit also bounds downloads with unknown Content-Length
         # and FFmpeg outputs, not just yt-dlp's advisory --max-filesize check.
         guard = (

@@ -138,27 +138,6 @@ class AudioAsset(BaseModel):
     provider: str | None = None
 
 
-class KeyPoint(BaseModel):
-    text: str
-    evidence: list[str] = Field(default_factory=list)
-
-
-class Chapter(BaseModel):
-    title: str
-    start_ms: int | None = None
-    end_ms: int | None = None
-    summary: str = ""
-
-
-class Analysis(BaseModel):
-    schema_version: int = 1
-    summary: str
-    key_points: list[KeyPoint] = Field(default_factory=list)
-    chapters: list[Chapter] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    language: str | None = None
-
-
 class RequestRecord(BaseModel):
     endpoint: str
     billed: bool
@@ -177,6 +156,8 @@ class TranscriptManifest(BaseModel):
 
 
 class AnalysisManifest(BaseModel):
+    """Legacy derived-artifact metadata; Soota preserves it but never generates analysis."""
+
     status: AnalysisStatus = AnalysisStatus.NOT_REQUESTED
     path: str | None = None
 

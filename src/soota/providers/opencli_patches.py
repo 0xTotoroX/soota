@@ -169,7 +169,7 @@ def _patch_xiaohongshu_filters(install: Path) -> str | None:
     path = install / relative
     if not path.is_file():
         return None
-    original = path.read_text()
+    original = path.read_text(encoding="utf-8")
     if original.count("function buildApplySearchFiltersJs(requestedFilters) {") != 1:
         return None
     if all(original.count(new) == 1 and old not in original for old, new in XIAOHONGSHU_FILTERS):
@@ -187,7 +187,7 @@ def _patch_youtube_live_track(install: Path) -> str | None:
     path = install / relative
     if not path.is_file():
         return None
-    original = path.read_text()
+    original = path.read_text(encoding="utf-8")
     if original.count(YOUTUBE_LIVE_TRACK) == 1:
         return relative
     if original.count(YOUTUBE_LIVE_TRACK_ANCHOR) != 1:
@@ -201,7 +201,7 @@ def _patch_youtube(install: Path) -> str | None:
     path = install / relative
     if not path.is_file():
         return None
-    original = path.read_text()
+    original = path.read_text(encoding="utf-8")
     # Patch the three known capture paths together. Do not guess when upstream drifts.
     if all(original.count(new) == 1 for _, new in YOUTUBE_TIMEDTEXT_FILTERS):
         return relative
@@ -218,7 +218,7 @@ def _patch_navigation(install: Path) -> str | None:
     path = install / relative
     if not path.is_file():
         return None
-    original = path.read_text()
+    original = path.read_text(encoding="utf-8")
     if REPLACEMENT not in original:
         # Two matching calls exist: first navigation and stale-target recovery.
         # Replace only the first, scoped to the known Page.goto implementation.

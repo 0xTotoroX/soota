@@ -32,12 +32,12 @@ SUBTITLE_FORMATS = {
 def parse_outputs(value: str | None, optional: str | None = None) -> list[OutputSpec]:
     names = [name.strip() for name in (value or "context").split(",") if name.strip()]
     extras = [name.strip() for name in (optional or "").split(",") if name.strip()]
+    if set(names + extras) - {"video", "audio", "transcript", "context", "markdown", "images", "data"}:
+        raise InputError("Soota 只采集原文；分析、笔记、文章和交付请使用 lorelab content。")
     try:
         return [OutputSpec(kind=name, required=name not in extras) for name in dict.fromkeys([*names, *extras])]  # type: ignore[arg-type]
     except ValidationError as exc:
-        raise InputError(
-            "产物支持 video/audio/transcript/context/markdown/images/data/analysis/note/outline/article。"
-        ) from exc
+        raise InputError("产物支持 video/audio/transcript/context/markdown/images/data。") from exc
 
 
 def parse_inputs(value: str | None, inputs_file: Path | None) -> list[InputSpec]:

@@ -1,7 +1,7 @@
 interface:
-  display_name: "Soota 内容采集与归纳"
-  short_description: "采集字幕与正文，按请求将粘贴文字或 Cubox 批次提炼归档并接续幕布大纲"
-  default_prompt: "使用 $soota 保存这段文字，精炼其中的知识并按目标知识库的现有分类归档。"
+  display_name: "Soota 内容采集"
+  short_description: "采集正文、媒体与字幕，保存原文内容包、核对产物并恢复采集任务"
+  default_prompt: "使用 $soota 获取这些来源的原文和所需媒体，保存内容包并报告实际产物与缺口。"
 
 policy:
   allow_implicit_invocation: true

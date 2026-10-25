@@ -71,6 +71,7 @@ def ingest(
     fallback: str | None = None,
     output: Path | None = None,
     max_cost: float | None = None,
+    weir_max_credits: int | None = None,
     max_items: int | None = None,
     max_pages: int = 10,
     workers: int = 1,
@@ -89,6 +90,45 @@ def ingest(
     exclude_promotions: bool | None = None,
     exclude_ranges: list[str] | None = None,
 ) -> CommandResult:
+    from soota.workflow_compat import ingest_needs_workflow, invoke
+
+    if ingest_needs_workflow(want, optional, destination, vault):
+        return invoke(
+            "ingest",
+            settings,
+            url,
+            want=want,
+            optional=optional,
+            inputs_file=inputs_file,
+            operation=operation,
+            params=params,
+            params_file=params_file,
+            expand=expand,
+            transcript=transcript,
+            audio_provider=audio_provider,
+            provider=provider,
+            fallback=fallback,
+            output=output,
+            max_cost=max_cost,
+            weir_max_credits=weir_max_credits if weir_max_credits is not None else settings.weir.task_credits,
+            max_items=max_items,
+            max_pages=max_pages,
+            workers=workers,
+            max_bytes=max_bytes,
+            min_height=min_height,
+            allow_silent=allow_silent,
+            language=language,
+            input_format=input_format,
+            subtitle_formats=subtitle_formats,
+            destination=destination,
+            vault=vault,
+            subdir=subdir,
+            dry_run=dry_run,
+            force=force,
+            prefer_youtube=prefer_youtube,
+            exclude_promotions=exclude_promotions,
+            exclude_ranges=exclude_ranges,
+        )
     if type(workers) is not int or not 1 <= workers <= 8:
         raise InputError("workers 必须为 1–8 的整数。")
     # Keep the established single-video default command contract. Explicit
@@ -129,6 +169,83 @@ def ingest(
                 exclude_promotions=exclude_promotions,
                 exclude_ranges=exclude_ranges,
             )
+    spec = prepare_task(
+        settings,
+        url,
+        want=want,
+        optional=optional,
+        inputs_file=inputs_file,
+        operation=operation,
+        params=params,
+        params_file=params_file,
+        expand=expand,
+        transcript=transcript,
+        audio_provider=audio_provider,
+        provider=provider,
+        fallback=fallback,
+        output=output,
+        max_cost=max_cost,
+        weir_max_credits=weir_max_credits,
+        max_items=max_items,
+        max_pages=max_pages,
+        workers=workers,
+        max_bytes=max_bytes,
+        min_height=min_height,
+        allow_silent=allow_silent,
+        language=language,
+        input_format=input_format,
+        subtitle_formats=subtitle_formats,
+        destination=destination,
+        vault=vault,
+        subdir=subdir,
+        dry_run=dry_run,
+        force=force,
+        prefer_youtube=prefer_youtube,
+        exclude_promotions=exclude_promotions,
+        exclude_ranges=exclude_ranges,
+    )
+    settings = settings.model_copy(update={"default_language": spec.language})
+    return execute(settings, spec, dry_run=dry_run)
+
+
+def prepare_task(
+    settings: SootaSettings,
+    url: str | None = None,
+    *,
+    want: str | None = None,
+    optional: str | None = None,
+    inputs_file: Path | None = None,
+    operation: str | None = None,
+    params: list[str] | None = None,
+    params_file: Path | None = None,
+    expand: bool = False,
+    transcript: TranscriptMode = TranscriptMode.AUTO,
+    audio_provider: str | None = None,
+    provider: str | None = None,
+    fallback: str | None = None,
+    output: Path | None = None,
+    max_cost: float | None = None,
+    weir_max_credits: int | None = None,
+    max_items: int | None = None,
+    max_pages: int = 10,
+    workers: int = 1,
+    max_bytes: int = 2 * 1024**3,
+    min_height: int | None = None,
+    allow_silent: bool = False,
+    language: str | None = None,
+    input_format: str | None = None,
+    subtitle_formats: str = "srt",
+    destination: Path | None = None,
+    vault: Path | None = None,
+    subdir: str = "Soota",
+    dry_run: bool = False,
+    force: bool = False,
+    prefer_youtube: bool | None = None,
+    exclude_promotions: bool | None = None,
+    exclude_ranges: list[str] | None = None,
+) -> TaskSpec:
+    if type(workers) is not int or not 1 <= workers <= 8:
+        raise InputError("workers 必须为 1–8 的整数。")
     if operation is not None:
         if inputs_file is not None:
             raise InputError("--operation 与 --inputs-file 不能同时指定；多操作请写入 JSON 输入清单。")
@@ -163,6 +280,7 @@ def ingest(
             max_pages=max_pages,
             workers=workers,
             max_cost=max_cost,
+            weir_max_credits=weir_max_credits if weir_max_credits is not None else settings.weir.task_credits,
             max_bytes=max_bytes,
             min_height=min_height,
             allow_silent=allow_silent,
@@ -179,8 +297,7 @@ def ingest(
     except ValidationError as exc:
         raise InputError("任务参数无效；请检查目标、格式、范围和输出位置。") from exc
     spec.execution_context = execution_context(settings, chosen, inputs, scope=spec.execution_scope)
-    settings = settings.model_copy(update={"default_language": spec.language})
-    return execute(settings, spec, dry_run=dry_run)
+    return spec
 
 
 def capabilities(

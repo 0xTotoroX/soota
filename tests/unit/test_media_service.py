@@ -317,7 +317,10 @@ def test_os_limit_bounds_unknown_length_tool_outputs(tmp_path):
             timeout=10,
             limit_file_bytes=1024,
         )
-    assert output.stat().st_size <= 1024
+    if sys.platform == "win32":
+        assert not output.exists()  # No dispatch without an enforceable hard file limit.
+    else:
+        assert output.stat().st_size <= 1024
 
 
 def test_audio_conversion_does_not_claim_upstream_duration_was_known(settings, samples):

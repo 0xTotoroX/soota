@@ -1,13 +1,14 @@
 """Execute and resume unified artifact tasks.
 
-[INPUT]: TaskSpec, enumeration, bounded scheduler, native identity checks and artifact services.
-[OUTPUT]: Per-item artifacts/checkpoints and one ordered CommandResult.
+[INPUT]: TaskSpec/Weir credit caps, enumeration, scheduler, native identity checks and artifact services.
+[OUTPUT]: Source artifacts/checkpoints and one ordered CommandResult; old workflow requests are forwarded.
 [POS]: tasks orchestration; owns budget scope, job lock and interruption recovery.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -26,14 +27,12 @@ from soota.artifacts.bundle import (
     write_artifact,
     write_bundle,
 )
-from soota.artifacts.export import _target as export_target
-from soota.artifacts.export import export_bundle
 from soota.artifacts.models import BundleV2
 from soota.config import SootaSettings
 from soota.content.native import MEDIA_SUFFIXES
 from soota.errors import AuthBudgetError, InputError, SootaError, SourceError, StorageError
 from soota.media import MediaAsset, MediaService
-from soota.models import AnalysisStatus, CommandResult, MediaItem, ProcessingManifest, TranscriptMode, TranscriptSource
+from soota.models import CommandResult, MediaItem, ProcessingManifest, TranscriptMode, TranscriptSource
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
 from soota.storage.jobs import JobStore
@@ -42,7 +41,7 @@ from soota.tasks.acquire import collect_media, collect_text, native_operation, s
 from soota.tasks.enumeration import expand_inputs
 from soota.tasks.inputs import file_fingerprint, source_for
 from soota.tasks.models import InputSpec, StepState, TaskItem, TaskJob, TaskSpec
-from soota.tasks.outputs import _apply_analysis, _export_subtitles, _handoff, _images
+from soota.tasks.outputs import _export_subtitles, _images
 from soota.tasks.scheduler import run_items
 from soota.tasks.state import (
     _bundle_lock,
@@ -179,12 +178,6 @@ def _satisfied(folder: Path, bundle: BundleV2, goal: str, spec: TaskSpec, row: T
         )
     if goal == "images":
         return bool(_valid(folder, bundle, "image")) and row.steps.get("images", StepState()).status == "completed"
-    if goal in {"note", "article", "analysis", "outline"}:
-        return (
-            _source_current(folder, bundle, spec, row)
-            and bundle.analysis.status == AnalysisStatus.READY
-            and any(a.format == "md" for a in _valid(folder, bundle, goal))
-        )
     matches = [a for a in _valid(folder, bundle, goal) if _cache_matches(a, spec, row)]
     if goal == "video" and spec.min_height is not None:
         matches = [
@@ -232,7 +225,7 @@ def _run_item_locked(
     if seed.kind == "operation":
         cached_raw = work / "native.json"
         if cached_raw.is_file():
-            saved = json.loads(cached_raw.read_text())
+            saved = json.loads(cached_raw.read_text(encoding="utf-8"))
             operation = NativeOperation(
                 raw=saved["raw"],
                 provider=saved["provider"],
@@ -328,7 +321,7 @@ def _run_item_locked(
                 raise SourceError("部分媒体未通过验证，已保留其余产物。", details={"media_errors": errors})
 
         _step(settings, job, row, "media", fetch_media)
-    text_goals = spec.wants & {"context", "markdown", "transcript", "note", "article", "analysis", "outline"}
+    text_goals = spec.wants & {"context", "markdown", "transcript"}
     if "images" in spec.wants and not native_images:
         text_goals.add("images")
     bundle = load_bundle(folder)
@@ -426,9 +419,17 @@ def _run_item_locked(
             nonlocal raw
             if seed.kind == "operation" and operation is None:
                 raise SourceError("原生读取失败，未生成替代数据。")
+            if raw is None and row.steps.get("content", StepState()).status in {"failed", "blocked"}:
+                raise SourceError("正文获取失败，没有真实原始数据；未用包元数据替代。")
+            if raw is None and (spec.provider == "weir" or bundle.processing.provider == "weir"):
+                if not text_goals:
+                    raise InputError("Weir 原始数据需要与 context/markdown 一起采集。")
+                raw = collect_text(settings, spec, seed, work).data
+                if raw is None:
+                    raise SourceError("Weir 未交付真实原始数据。")
             if raw is None:
                 if seed.kind == "file" and Path(seed.value).suffix.lower() == ".json":
-                    raw = json.loads(Path(seed.value).read_text())
+                    raw = json.loads(Path(seed.value).read_text(encoding="utf-8"))
                 elif seed.kind == "url" and not text_goals:
                     from soota.providers.router import inspect_item
 
@@ -480,40 +481,8 @@ def _run_item_locked(
 
         _step(settings, job, row, "images", save_images)
     bundle = load_bundle(folder)
-    if spec.wants & {"note", "article", "analysis", "outline"} and not all(
-        _satisfied(folder, bundle, goal, spec, row) for goal in spec.wants & {"note", "article", "analysis", "outline"}
-    ):
-
-        def request_analysis() -> None:
-            if not _source_current(folder, bundle, spec, row):
-                raise SourceError("尚未取得符合本次条件的正文，未创建分析接续。")
-            _handoff(folder, bundle, spec, job, row)
-
-        _step(settings, job, row, "analysis-request", request_analysis)
     bundle.metadata["task"] = {"task_id": job.id, "item_id": row.item_id}
     save_bundle(folder, bundle)
-    if spec.destination is not None or spec.vault is not None:
-
-        def export() -> Path:
-            # Distinct input bundles can share a source/export destination.
-            # Keep export's collision preflight and writes together.
-            with job._export_lock:
-                target = export_target(folder, spec.destination, spec.vault, spec.subdir)
-                if target.resolve() == folder.resolve():
-                    raise InputError("导出目标与原内容包相同。")
-                # A destination may also be another running task's input bundle.
-                with _bundle_lock(target):
-                    return export_bundle(folder, destination=spec.destination, vault=spec.vault, subdir=spec.subdir)
-
-        result = _step(
-            settings,
-            job,
-            row,
-            "export",
-            export,
-        )
-        if result is not None:
-            row.data["export"] = str(result)
     bundle = load_bundle(folder)
     missing = [goal for goal in spec.required if not _satisfied(folder, bundle, goal, spec, row)]
     if row.steps.get("media", StepState()).status in {"failed", "blocked"}:
@@ -529,12 +498,6 @@ def _run_item_locked(
     )
     if not missing and not any(error["step"] == "export" for error in row.errors):
         row.status = "completed"
-    elif (
-        missing
-        and set(missing) <= {"note", "article", "analysis", "outline"}
-        and row.steps.get("analysis", StepState()).status == "waiting_analysis"
-    ):
-        row.status = "waiting_analysis"
     else:
         row.status = (
             "partial"
@@ -578,6 +541,10 @@ def execute(
     dry_run: bool = False,
     _locked: bool = False,
 ) -> CommandResult:
+    from soota.workflow_compat import invoke, needs_workflow
+
+    if analysis is not None or needs_workflow(spec.model_dump()):
+        return invoke("execute", settings, spec, job=job, analysis=analysis, dry_run=dry_run, _locked=_locked)
     if dry_run:
         return CommandResult(
             ok=True,
@@ -595,6 +562,9 @@ def execute(
                 "execution_context": execution_context(settings, spec.provider, spec.inputs, scope=spec.execution_scope)
             }
         )
+    if spec.weir_max_credits is not None:
+        settings = settings.model_copy(deep=True)
+        settings.weir.task_credits = spec.weir_max_credits
     job = job or create_job(settings, spec)
     budget = TaskBudget(task_folder(settings, job.id), spec.max_cost)
     guard = nullcontext() if _locked else JobStore(settings.jobs_dir).lock(job.id)
@@ -604,8 +574,6 @@ def execute(
             save_job(settings, job)
             if not job.expanded:
                 set_inputs(settings, job, expand_inputs(settings, spec, job))
-            if analysis is not None:
-                _apply_analysis(settings, job, analysis, force=spec.force)
             inputs = resolved_inputs(settings, job)
             run_items(
                 job.items[: spec.max_items],
@@ -648,6 +616,11 @@ def execute(
             if blocked_enumeration:
                 job.status = "partial"
             save_job(settings, job)
+    return result_for(settings, spec, job)
+
+
+def result_for(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> CommandResult:
+    budget = TaskBudget(task_folder(settings, job.id), spec.max_cost)
     selected = job.items[: spec.max_items]
     complete = job.status == "completed"
     data: dict[str, Any] = {
@@ -667,6 +640,15 @@ def execute(
         **budget.snapshot(),
         "actual_cost_usd": None,
     }
+    from soota.storage.credit_budget import CreditBudget
+
+    credits = CreditBudget(settings.data_dir / "billing" / "weir")
+    if credits.path.exists() and (
+        spec.provider == "weir" or any(step.provider == "weir" for row in selected for step in row.steps.values())
+    ):
+        with credits.locked():
+            task_identity = hashlib.sha256(str(task_folder(settings, job.id).resolve()).encode()).hexdigest()
+            data["weir_credits"] = credits.summary(task_identity)
     data["reserved_cost_usd"] = float(data["reserved_cost_usd"])
     if len(selected) == 1:
         data = {**selected[0].data, **data}
@@ -688,18 +670,36 @@ def resume(
     max_items: int | None = None,
     max_pages: int | None = None,
     max_cost: float | None = None,
+    weir_max_credits: int | None = None,
     workers: int | None = None,
     analysis: Path | None = None,
     force: bool = False,
 ) -> CommandResult:
     if workers is not None and (type(workers) is not int or not 1 <= workers <= 8):
         raise InputError("workers 必须为 1–8 的整数。")
+    from soota.workflow_compat import invoke, job_needs_workflow
+
+    if analysis is not None or job_needs_workflow(settings, job_id):
+        return invoke(
+            "resume",
+            settings,
+            job_id,
+            max_items=max_items,
+            max_pages=max_pages,
+            max_cost=max_cost,
+            **({"weir_max_credits": weir_max_credits} if weir_max_credits is not None else {}),
+            workers=workers,
+            analysis=analysis,
+            force=force,
+        )
     record = JobStore(settings.jobs_dir).get(job_id)
     if record.get("kind") != "content-task":
         from soota.catalog import resume_catalog
 
         if analysis is not None:
             raise InputError("旧目录任务不接受分析提交。")
+        if weir_max_credits is not None:
+            raise InputError("--weir-max-credits 仅适用于统一内容任务。")
         if workers is not None:
             raise InputError("--workers 仅适用于统一内容任务；目录枚举仍按顺序执行。")
         return resume_catalog(settings, job_id, max_items=max_items, max_pages=max_pages, max_cost=max_cost)
@@ -713,6 +713,7 @@ def resume(
                 "max_items": max_items,
                 "max_pages": max_pages,
                 "max_cost": max_cost,
+                "weir_max_credits": weir_max_credits,
                 "workers": workers,
             }.items()
             if value is not None
@@ -722,7 +723,11 @@ def resume(
             for info in job.enumeration.values()
             if isinstance(info, dict)
         )
-        if job.enumeration and (updates.keys() - {"workers"} or incomplete_enumeration) and analysis is None:
+        if (
+            job.enumeration
+            and (updates.keys() - {"workers", "weir_max_credits"} or incomplete_enumeration)
+            and analysis is None
+        ):
             job.expanded = False
         from soota.tasks.entry import execution_context
 

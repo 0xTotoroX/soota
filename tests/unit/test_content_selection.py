@@ -16,7 +16,7 @@ from soota.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
-from soota.pipeline import ingest, render
+from soota.pipeline import ingest
 from soota.providers.mcp_client import StdioMCPClient
 from soota.providers.opencli import OpenCLIProvider
 from soota.providers.opencli_patches import NAVIGATION, REPLACEMENT, apply_managed_fixes
@@ -170,7 +170,12 @@ def test_filter_roundtrip_and_disabled_search(settings, monkeypatch, tmp_path):
     assert "text 2" in (folder / "transcript.original.md").read_text()
     analysis = tmp_path / "analysis.json"
     analysis.write_text('{"summary":"Example","key_points":[]}')
-    render(settings, bundle=folder, analysis=analysis)
+    manifest_path = folder / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    (folder / "content.md").write_text("Existing user analysis")
+    manifest["analysis"] = {"status": "ready", "path": "content.md"}
+    manifest["files"]["content.md"] = "content.md"
+    manifest_path.write_text(json.dumps(manifest))
     assert "transcript.original.md" in json.loads((folder / "manifest.json").read_text())["files"]
     with pytest.raises(InputError, match="过滤结果变化"):
         ingest(settings, YOUTUBE, provider="opencli", max_cost=0)

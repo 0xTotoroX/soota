@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import math
 import os
 import selectors
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 
 from soota.errors import SourceError
+from soota.platform_support import WINDOWS, command_argv, utf8_environment
+from soota.providers.process_pipes import collect_pipes
 
 
 @dataclass
@@ -19,8 +23,13 @@ class ProcessResult:
 
 def run_process(argv: list[str], *, timeout: float, max_bytes: int, input_bytes: bytes | None = None) -> ProcessResult:
     """Bound both pipes while reading; kill the process group on timeout or cancellation."""
-    env = dict(os.environ)
+    if not math.isfinite(timeout) or timeout <= 0 or type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("timeout and max_bytes must be positive and finite")
+    env = utf8_environment()
     env.pop("TIKHUB_API_KEY", None)
+    argv = command_argv(argv)
+    if WINDOWS:
+        return _run_windows(argv, env, timeout=timeout, max_bytes=max_bytes, input_bytes=input_bytes)
     process = subprocess.Popen(
         argv,
         stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
@@ -83,3 +92,27 @@ def run_process(argv: list[str], *, timeout: float, max_bytes: int, input_bytes:
     return ProcessResult(
         process.returncode, output["stdout"].decode("utf-8", "replace"), output["stderr"].decode("utf-8", "replace")
     )
+
+
+def _run_windows(
+    argv: list[str], env: dict[str, str], *, timeout: float, max_bytes: int, input_bytes: bytes | None
+) -> ProcessResult:
+    from soota.providers.windows_process import windows_process
+
+    process = None
+    threads: list[threading.Thread] = []
+    try:
+        with windows_process(argv, env) as process:
+            wait, threads = collect_pipes(process, timeout=timeout, max_bytes=max_bytes, input_bytes=input_bytes)
+            output = wait()
+        return ProcessResult(
+            process.returncode, output["stdout"].decode("utf-8", "replace"), output["stderr"].decode("utf-8", "replace")
+        )
+    finally:
+        # The Job is closed first: blocked readers/writers wake when every child closes its pipes.
+        for thread in threads:
+            thread.join(timeout=5)
+        if process is not None:
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()

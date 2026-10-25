@@ -97,3 +97,6 @@ auto 配置必须明确给出 `--min-balance` 或 `--no-balance-limit`。余额�
 - `providers/tikhub/client.py`：计费 gate 与 HTTP 发送的统一边界，禁用隐式重试。
 
 [OpenCLI 上游](https://github.com/jackwener/OpenCLI) · [TikHub 用户信息](https://docs.tikhub.io/186826050e0) · [终端教程](terminal-tutorial.md) · [Provider 架构](providers.md)
+
+
+Weir 的标准入口为 `ingest URL --provider weir --want context`，覆盖 X/Article 与 Reddit 单帖正文，不属于 `features call` / `api call` 的 TikHub 注册表。免费模式、credits 配置和 auto 能力兜底条件见 [Weir](weir.md)。

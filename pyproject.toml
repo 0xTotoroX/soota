@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "soota"
 version = "0.1.0"
-description = "Give Soota a link: collect content, recover the transcript, and leave traceable Markdown."
+description = "Collect source text, download media and subtitles, and create traceable context bundles."
 readme = "README.md"
 license = "GPL-3.0-only"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES/*"]

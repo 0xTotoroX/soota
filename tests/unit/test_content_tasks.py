@@ -119,11 +119,6 @@ def test_plain_txt_does_not_invent_srt_times(settings, tmp_path):
     assert not (Path(result.data["output"]) / "captions.srt").exists()
 
 
-def test_dry_run_has_no_task_or_output_writes(settings, article):
-    result = ingest(settings, str(article), want="context,note", dry_run=True)
-    assert result.ok and not settings.jobs_dir.exists() and not settings.output_dir.exists()
-
-
 def test_native_failure_is_not_fake_data_success(settings, monkeypatch):
     monkeypatch.setattr(
         "soota.tasks.runner.native_operation", lambda *a, **k: (_ for _ in ()).throw(SourceError("failed read"))
@@ -309,47 +304,6 @@ def test_video_and_audio_share_one_local_source_and_preserve_neighbors(settings,
     assert neighbor.read_bytes() == b"user-owned audio"
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
     assert not (Path(result.data["output"]) / "context.md").exists()
-
-
-def test_analysis_waits_and_resumes_with_matching_identity(settings, article, tmp_path):
-    result = ingest(settings, str(article), want="context,note")
-    assert not result.ok and result.data["job_status"] == "waiting_analysis"
-    folder = Path(result.data["output"])
-    request = json.loads((folder / "analysis-request.json").read_text())
-    submission = tmp_path / "submission.json"
-    submission.write_text(
-        json.dumps(
-            {
-                "task_id": request["task_id"],
-                "item_id": request["item_id"],
-                "context_fingerprint": request["context_fingerprint"],
-                "note_markdown": "# Note\n\nA supported note.",
-            }
-        )
-    )
-    done = resume(settings, result.data["job_id"], analysis=submission)
-    assert done.ok, done.model_dump()
-    assert (folder / "note.md").exists()
-    assert resume(settings, result.data["job_id"], analysis=submission).ok
-
-
-def test_wrong_task_analysis_never_writes(settings, article, tmp_path):
-    result = ingest(settings, str(article), want="note")
-    folder = Path(result.data["output"])
-    request = json.loads((folder / "analysis-request.json").read_text())
-    path = tmp_path / "wrong.json"
-    path.write_text(
-        json.dumps(
-            {
-                "task_id": "different",
-                "item_id": request["item_id"],
-                "context_fingerprint": request["context_fingerprint"],
-                "note_markdown": "wrong",
-            }
-        )
-    )
-    assert not resume(settings, result.data["job_id"], analysis=path).ok
-    assert not (folder / "note.md").exists()
 
 
 def test_manifest_is_bundle_and_unrelated_directory_is_rejected(settings, article, tmp_path):
@@ -572,29 +526,6 @@ def test_video_constraint_does_not_discard_native_images(settings, monkeypatch, 
     result = ingest(settings, operation="opencli.example.download", want="video,images", min_height=1080)
     assert not result.ok and result.data["missing_outputs"] == ["video"]
     assert any(a["kind"] == "image" for a in result.data["artifacts"])
-
-
-def test_analysis_goal_can_complete_without_a_reading_article(settings, article, tmp_path):
-    first = ingest(settings, str(article), want="analysis,outline")
-    assert first.data["job_status"] == "waiting_analysis"
-    folder = Path(first.data["output"])
-    request = json.loads((folder / "analysis-request.json").read_text())
-    submission = tmp_path / "analysis-submission.json"
-    submission.write_text(
-        json.dumps(
-            {
-                "task_id": request["task_id"],
-                "item_id": request["item_id"],
-                "context_fingerprint": request["context_fingerprint"],
-                "analysis": {"summary": "Supported summary"},
-                "outline_markdown": "# Outline\n\n- One topic",
-            }
-        )
-    )
-    result = resume(settings, first.data["job_id"], analysis=submission)
-    assert result.ok, result.model_dump()
-    assert (folder / "analysis.md").is_file() and (folder / "outline.md").is_file()
-    assert not (folder / "content.md").exists()
 
 
 def test_native_text_redaction_preserves_following_paragraphs():

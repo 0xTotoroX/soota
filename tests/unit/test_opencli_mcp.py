@@ -1,4 +1,5 @@
 import json
+import sys
 import textwrap
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def experimental_mcp(settings):
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_stdio_client_initializes_and_decodes_one_bounded_tool_result(tmp_path, dry_run):
+def test_stdio_client_initializes_and_decodes_one_bounded_tool_result(tmp_path, dry_run, monkeypatch):
     fake = tmp_path / "fake-mcp"
     marker = tmp_path / "session-closed"
     fake.write_text(
@@ -66,10 +67,10 @@ def test_stdio_client_initializes_and_decodes_one_bounded_tool_result(tmp_path, 
         fake.write_text(
             fake.read_text().replace("assert request['params']['name'] == 'site_run'", "raise SystemExit(9)")
         )
-    fake.chmod(0o755)
-    result = StdioMCPClient(OpenCLIMCPConfig(enabled=True, binary=str(fake), timeout_seconds=2)).call_site_readonly(
-        "bilibili", "video", {"bvid": "BV1M1421t7hT"}, dry_run=dry_run
-    )
+    monkeypatch.setattr("soota.providers.mcp_client.command_argv", lambda argv: [sys.executable, str(fake)])
+    result = StdioMCPClient(
+        OpenCLIMCPConfig(enabled=True, binary=sys.executable, timeout_seconds=2)
+    ).call_site_readonly("bilibili", "video", {"bvid": "BV1M1421t7hT"}, dry_run=dry_run)
     if dry_run:
         assert result["dispatched"] is False
     else:

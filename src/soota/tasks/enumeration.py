@@ -91,7 +91,7 @@ def expand_inputs(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> list
 
             cached = folder / f"native-enumeration-{index}.json"
             if cached.is_file():
-                urls = json.loads(cached.read_text())["urls"]
+                urls = json.loads(cached.read_text(encoding="utf-8"))["urls"]
             else:
                 if spec.provider not in {"auto", "opencli"}:
                     raise SourceError("该搜索展开契约当前使用 OpenCLI，未切换显式来源。")
@@ -118,7 +118,7 @@ def expand_inputs(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> list
                 raise SourceError("该播放列表标准枚举当前使用 yt-dlp，未切换显式来源。")
             cache = folder / f"playlist-{index}.json"
             if cache.is_file() and previous.get("limit", 0) >= spec.max_items:
-                payload = json.loads(cache.read_text())
+                payload = json.loads(cache.read_text(encoding="utf-8"))
                 items, info = [InputSpec.model_validate(i) for i in payload["inputs"]], previous
             else:
                 items, info = _playlist(settings, seed.value, spec.max_items)

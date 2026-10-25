@@ -1,37 +1,51 @@
 # Provider 与独立运行时
 
+## Windows 运行
+
+核心导入不要求 Unix 的 `fcntl` 或 `resource`。`storage/locking.py` 在 Unix 使用 `flock`，在 Windows 使用 `LockFileEx`，保留共享／排他、等待／立即失败语义；任务互斥、全批预算和运行时更新锁都使用真实内核锁。预算的请求前持久预留与恢复规则不变。
+
+`platform_support.py` 处理虚拟环境入口、npm 包入口和 UTF-8。Windows 虚拟环境使用 `Scripts/python.exe`；OpenCLI、opencli-mcp 与 npm 的 `.cmd` 入口从已安装包的 `bin` 元数据解析为 `node + JS`，参数不拼接到 shell。自定义批处理入口会明确拒绝，可配置 `.exe` 或 Node.js 脚本。独立 Soota 无需 LoreLab 平台模块。
+
+`providers/process_pipes.py` 在 Windows 并发写 stdin、读 stdout/stderr，合计输出上限不变；`windows_process.py` 先将等待派发的进程放入 Job Object，再启动实际命令。超时、超限、取消和失败会清理其子进程树；无法建立保护时不派发。成功的 daemon 启动允许后台服务继续运行。Unix 保留 selector 和进程组逻辑。
+
+Windows 没有这里所需的 `RLIMIT_FSIZE` 等价接口。需要硬文件字节上限的外部 yt-dlp 媒体下载（含 HLS/DASH）、FFmpeg 提取和合轨在派发前返回 `file_limit_unavailable`；不采用轮询文件大小或提示性的 `--max-filesize` 冒充硬上限。直接 HTTP 文件下载在写入前逐块检查上限；已有文件验证、字幕和正文路径仍可使用。调用方不得静默删掉必需媒体目标或绕过预算继续执行。
+
+Downie、macOS Keychain 和 Apple Silicon MLX 是可选 Mac 功能，不能阻止 Windows 导入。Windows 使用环境变量提供 TikHub Key。当前回归含本地子进程、锁竞争、模拟 Windows 分支及 Windows 内核专用测试；在 macOS 上通过不代表已完成真实 Windows、浏览器登录或网站验收。
+
 ## 处理流程与职责
 
-这张图按职责展示统一内容任务。每个框包含内部的工具、格式和失败处理；只有请求的目标需要某一步时才执行它。默认文字采集到 context 结束，媒体目标直接交付文件。
+这张图按职责展示 Soota 的采集、处理、产物与恢复。每个框包含内部的工具、格式和失败处理；只有请求的目标需要某一步时才执行它。默认文字采集到 context 结束，媒体目标直接交付文件。语义产物和导出由外部 LoreLab content 执行，知识整理和学习复习分别由明确请求触发。
 
 ```mermaid
 flowchart TD
-    A[输入与目标] --> B[有序枚举与来源去重]
+    A[链接、媒体、本地文件与目标] --> B[有序枚举与来源去重]
     B --> H[有界条目调度：1–8 workers]
     H --> C[内容获取]
     H -.逐项进度合并与同目录串行.-> S[任务状态与内容包锁]
-    C -.计费请求前持久预留.-> Q[全批共享预算]
-    C --> D[内容处理]
-    D --> E[校验与保存产物]
-    E -.明确要求分析或文章.-> F[Agent 按主题分析与独立草稿]
-    F --> E
-    E -.指定目的地.-> G[导出]
-    F -.明确要求知识落地.-> K[单写者合并知识与 Mubu CLI 导入回读]
+    C -.计费请求前持久预留.-> Q[全批 USD 预算与 Weir 月度/任务 credits]
+    C --> D[内容处理：含 Weir 正文绑定与目标 ID 校验]
+    D --> E[校验与保存 context、媒体及所选产物]
+    E -.请求分析、笔记、文章或大纲.-> F[外部 Agent 写作]
+    F --> L[LoreLab content：校验提交、渲染与恢复]
+    E -.指定整包目的地.-> G[LoreLab content：导出]
+    E -.明确请求知识整理或学习.-> K[LoreLab knowledge/study 与 Skill]
+    K -.语义处理.-> L
+
 ```
 
 | 黑盒 | 职责 | 代码入口 |
 | --- | --- | --- |
 | 输入与目标 | 识别链接、本地文件、清单与旧内容包，声明必需和可选产物 | `tasks/entry.py`、`tasks/inputs.py`、`tasks/models.py` |
-| 任务编排 | 有序枚举与去重；有界条目并行，同目录串行；传播上下文，锁内合并进度，复用产物，中断收尾；全批请求前预留 | `tasks/runner.py`、`tasks/scheduler.py`、`tasks/enumeration.py`、`tasks/state.py`、`storage/task_budget.py` |
+| 采集任务编排 | 有序枚举与去重；有界条目并行，同目录串行；传播上下文，锁内合并进度，复用产物，中断收尾；全批请求前预留 | `tasks/runner.py`、`tasks/scheduler.py`、`tasks/enumeration.py`、`tasks/state.py`、`storage/task_budget.py`、`storage/credit_budget.py` |
 | 内容获取 | 按能力选择 Provider，取得原生数据、正文、字幕或媒体；保留真实获取状态 | `providers/`、`content/native.py`、`tasks/acquire.py` |
 | 内容处理 | 字幕格式统一、本地转写、正文结构转换及媒体处理；默认不做语义改写 | `transcripts/`、`content/`、`media/` |
 | 校验与保存产物 | 校验文件与媒体，登记 v2 产物、来源及校验值，保护既有源文和文章 | `media/probe.py`、`artifacts/bundle.py` |
-| Agent 分析与整理 | 按明确目标读取 context，按主题并行产出独立草稿；单写者提交任务结果、合并知识及调用外部 CLI；Soota 检查正文指纹、任务身份与证据 | `skills/soota/`、`tasks/outputs.py`、`artifacts/analysis.py` |
-| 导出 | 写入指定目录，维持相对附件链接并检查人工修改冲突 | `artifacts/export.py` |
+| 外部语义处理 | Agent 阅读与写作；LoreLab 校验正文指纹、task/item 身份与证据，保存语义产物 | `lorelab content ingest/resume/render`，LoreLab Skill |
+| 外部整包导出 | 写入指定目录，维持相对附件链接并检查人工修改冲突 | `lorelab content export` |
 
-`docs/tasks.md` 是统一输入、产物目标、任务恢复和分析提交的操作契约。职责、阶段顺序或能力改变时，同步更新本图、受影响的表和对应 Skill；不以未来目标代替当前实现。
+[统一任务契约](tasks.md)维护采集输入、原文产物和恢复；语义提交、渲染与导出以及知识文章、学习交付由外部 LoreLab 维护，见[迁移说明](knowledge.md)。职责、阶段顺序或能力改变时，同步更新本图、受影响的表和对应 Skill；不以未来目标代替当前实现。
 
-Cubox → 本地不改写的 source 快照 → Soota context/note/outline → 知识与幕布的组合流程属于 Skill。Cubox 与 Mubu 由各自 CLI 执行，Soota 不接入其私有 API。图中 Agent 的主题并行与 CLI 的 `--workers` 分属不同阶段；语义分析、知识库修改和云端写入都需要对应请求。单元测试验证调度、共享预算、恢复和写入隔离，不代表真实站点或收藏批次已验收。
+LoreLab 接收 Soota 内容包并通过 Cubox、幕布各自的 CLI 组织知识交付。独立 Soota 不包含该工作流，也不要求安装 LoreLab。采集任务的并行、预算、缓存和恢复继续属于 Soota；语义目标、提交校验、渲染、导出、知识审阅、单写入者、交付回读和清理属于 LoreLab。旧语义或交付调用仅作隐藏兼容转发，缺少 LoreLab 时在修改任务前停止。正文可用、任务完成或 hash 正确均不证明原始来源完整，语义判断仍由 Agent 负责。单元/契约测试不代表真实站点或收藏批次已验收。
 
 ### 字幕边界
 
@@ -42,6 +56,10 @@ Cubox → 本地不改写的 source 快照 → Soota context/note/outline → �
 格式能力、解析限制和新增格式的位置以 [字幕格式与 context](subtitle-formats.md#统一转换层) 为准；获取工具顺序与格式获取偏好都属于内容获取黑盒。
 
 字幕路径按平台及能力的费用或手动规则排序，免费来源默认优先，可选 Monid 与 TikHub 均受费用策略约束；媒体、正文和原生数据分别使用对应能力，不能将同一个排序套用于所有步骤。MCP 默认停用。显式来源严格保留，获取失败不会自动重新从其他 Provider 获取。业务入口见 [功能入口与费用策略](features.md)，组合任务和能力发现见 [统一内容任务](tasks.md)。
+
+## Weir 正文来源
+
+`providers/weir.py` 获取原始单项数据并执行免费余额检查；`content/weir.py` 核对帖子/Article 身份、确定性绑定全文并写入有效缓存；`storage/credit_budget.py` 负责跨任务月度与任务累计 credits 的锁内预留和核账。它们复用统一任务/原文包，不包含语义生成。配置、能力和边界见 [Weir](weir.md)。
 
 ## 当前接入范围
 
@@ -211,10 +229,11 @@ uv run soota runtime rollback --json
 
 | 文件 | 职责 |
 | --- | --- |
-| `tasks/` | 统一输入与目标、步骤组合、集合展开、逐项检查点及分析接续 |
+| `tasks/` | 七类采集目标、步骤组合、集合展开、逐项检查点及采集恢复 |
 | `content/` | 本机能力发现、显式原生读取及受控结果转换 |
 | `media/` | 本地或远程媒体获取、合并、抽音轨及实际文件验证 |
-| `artifacts/` | v1/v2 内容包、产物哈希、分析证据与受保护导出 |
+| `artifacts/` | v1/v2 原文内容包、来源证据与产物哈希；保留旧分析字段的数据兼容 |
+| `storage/credit_budget.py` | Weir 跨任务月度／任务 credits 预留、核账和未决请求保留 |
 | `storage/task_budget.py` | 全批计费请求的原子预留和恢复预算 |
 | `providers/router.py` | 能力选择、元数据兜底和请求预算 |
 | `mcp_cli.py` | 按需发现并调用 MCP 只读站点命令 |

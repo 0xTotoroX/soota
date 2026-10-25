@@ -140,7 +140,7 @@ enabled = true
 interval_seconds = 0  # 每次在线任务检查；3600 表示一小时
 ```
 
-帮助、预估、离线预览和渲染不触发更新，Soota 退出后也没有后台更新任务。显式指定外部 binary 的 Provider 交由用户管理。自动更新会报告安装或兼容性错误；查看 `runtime_updates` 和 warnings，不要把检查完成当作全部安装成功。下列命令只读查询版本与仓库变化：
+帮助、预估和离线预览不触发更新，Soota 退出后也没有后台更新任务。显式指定外部 binary 的 Provider 交由用户管理。自动更新会报告安装或兼容性错误；查看 `runtime_updates` 和 warnings，不要把检查完成当作全部安装成功。下列命令只读查询版本与仓库变化：
 
 ```bash
 uv run soota updates check --json
@@ -196,7 +196,7 @@ export OPENCLI_PROFILE="PROFILE_ALIAS"
 
 个人关注名单和执行规则是结构化资料，应保存在项目外的私人文件中；环境变量只保存需要传递的路径或配置值，不把整份名单塞入环境变量。当前 Soota 尚没有名单管理、定时追踪或规则执行命令，不会自动读取名单文件。
 
-Obsidian 中的 `AGENTS.md` 可引用本地处理规则和 prompt，约定文章整理、分析格式、分类、引用和落盘位置。Soota Skill 指导 Agent 在处理前读取这些文件，并在明确要求分析或文章处理时读取所选 prompt 的最新内容；CLI 不解释这些文件。个人名单、规则正文、私人知识库路径与账号资料不写入共享 Skill。面向阅读的来源名称可自定义，命令标识和 CLI 管理的内容包路径仍遵循原有契约。
+Obsidian 中的 `AGENTS.md` 可引用本地处理规则和 prompt，约定文章整理、分析格式、分类、引用和落盘位置。采集时 Soota Skill 读取相关的来源与保存规则；语义分析、文章、分类查重合并由 LoreLab Skill 指导 Agent 读取对应规则和 prompt。CLI 不解释这些文件，也不自动分类或合并。个人名单、规则正文、私人知识库路径与账号资料不写入共享 Skill。面向阅读的来源名称可自定义，命令标识和 CLI 管理的内容包路径仍遵循原有契约。
 
 项目外不等于不会上传：知识库、用户配置或云盘若另外开启同步，需要在各自的同步/Git 配置中排除私人名单、状态和采集结果。Git 忽略规则不会清除已经提交过的历史内容。
 
@@ -242,23 +242,25 @@ MCP 仍默认停用。显式来源发生获取错误时保留错误，不因另�
 
 ## Context 与分析接续
 
-原单视频命令默认保存 `context.md`、`transcript.md` 和 `manifest.json`，不生成文章。显式 `--want` 使用 v2 产物清单：正文、字幕、媒体和分析按实际目标保存，详情见 [内容包](tasks.md#内容包与导出)。`markdown` 与 `context` 都保持未加工正文；`article` 才要求 Agent 整理阅读文章。
+原单视频命令默认保存 `context.md`、`transcript.md` 和 `manifest.json`，不生成文章。显式 `--want` 使用 v2 产物清单，目标限于 `video/audio/transcript/context/markdown/images/data`，详情见[内容包](tasks.md#内容包与导出)。`markdown` 与 `context` 都保持未加工正文。
+
+需要保存分析、笔记、阅读文章或大纲时，使用已安装的 LoreLab：
 
 ```bash
-uv run soota ingest "内容 URL" --want analysis --max-cost 0 --json
-uv run soota ingest "/path/to/bundle" --want note,outline --json
-uv run soota jobs resume JOB_ID --analysis "/path/to/submission.json" --json
+lorelab content ingest "内容 URL" --want context,note
+lorelab content resume JOB --analysis /path/to/submission.json
+lorelab content render --bundle /path/to/bundle --analysis /path/to/submission.json
 ```
 
-`waiting_analysis` 表示原文已准备、分析尚未完成。Agent 读取内容包中的 `analysis-request.json` 和实际 context，使用请求里的身份、正文指纹和 schema 生成提交文件，再执行恢复命令。CLI 只校验与渲染，不调用模型；过期指纹和不存在的证据会拒绝。采集保留已有文章，来源变化时标记旧分析过时。
+LoreLab Skill 指导 Agent 读取真实 context 和交接模板、写作并提交；CLI 校验身份、指纹和引用证据，不调用模型。普通聊天总结无需入库或先写文章。采集保留旧文章，来源变化时标记旧分析过时。旧语义/交付 ingest 和 resume、`soota render` 仅隐藏兼容转发，未安装 LoreLab 时明确报错且不修改任务，见[迁移说明](knowledge.md)。
 
 ## 导出到目录或 Obsidian
 
 ```bash
-uv run soota ingest "/path/to/bundle" --want context \
-  --destination "/path/to/archive" --json
-uv run soota ingest "/path/to/bundle" --want note,outline \
-  --vault "/path/to/vault" --subdir "收件箱/Soota" --json
+lorelab content export --bundle /path/to/bundle --destination /path/to/archive
+lorelab content export --bundle /path/to/bundle --vault /path/to/vault --subdir 收件箱
 ```
 
-导出保留相对附件链接，使用稳定来源目录及 `.soota-export.json` 记录文件校验值。再次导出遇到手写修改或未登记的同名文件会报冲突；`--force` 不绕过这项保护。CLI 不自动选择知识分类，也不解释知识库 `AGENTS.md`；Agent 应按前述目的地约定完成目录选择和请求的分析。
+目的地导出由 LoreLab content 实现；Soota `--output` 只决定采集包位置。导出保留相对附件链接，沿用稳定来源目录及 `.soota-export.json` 文件校验值，人工修改或未登记文件冲突时停止，`--force` 不绕过保护。
+
+分类、查重和与既有笔记合并由 Agent 阅读目标规则与相关旧文后审阅，不是 CLI 自动行为。`knowledge publish` 只写新路径或复用相同 bytes，不自动覆盖合并。采集和原文内容包独立运行，不要求安装 LoreLab。

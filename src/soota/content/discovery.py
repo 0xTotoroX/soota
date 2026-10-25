@@ -1,3 +1,10 @@
+"""
+[INPUT]: Local runtimes, reviewed bindings and enabled providers.
+[OUTPUT]: Offline capability inventory, including Weir URL body contracts.
+[POS]: Discovery only; never claims live account or website verification.
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import importlib.metadata
@@ -221,7 +228,9 @@ def discover_capabilities(settings: SootaSettings) -> dict[str, Any]:
         }
     )
     if monid_enabled:
-        prices = json.loads(Path(__file__).parents[1].joinpath("providers/monid/prices.json").read_text())
+        prices = json.loads(
+            Path(__file__).parents[1].joinpath("providers/monid/prices.json").read_text(encoding="utf-8")
+        )
         for endpoint in registry.preferred():
             if endpoint.path not in prices["tikhub"]:
                 continue
@@ -240,6 +249,34 @@ def discover_capabilities(settings: SootaSettings) -> dict[str, Any]:
                     "verification": None,
                 }
             )
+    weir_enabled = provider_enabled(settings, "weir")
+    providers.append(
+        {
+            "provider": "weir",
+            "enabled": weir_enabled,
+            "state": "standard" if weir_enabled else "blocked",
+            "verification": None,
+        }
+    )
+    for operation, description in (
+        ("x.post", "X 单帖正文"),
+        ("x.article", "分享帖承载的 X Article 全文"),
+        ("reddit.post", "Reddit 单帖正文，不含评论"),
+    ):
+        capabilities.append(
+            {
+                "id": "weir." + operation,
+                "provider": "weir",
+                "operation": operation,
+                "description": description,
+                "state": "standard" if weir_enabled else "blocked",
+                "access": "read",
+                "output_contract": "single-item-body",
+                "verification": None,
+                "input": "ingest URL --provider weir",
+                "free_only": True,
+            }
+        )
     return {
         "providers": providers,
         "capabilities": capabilities,

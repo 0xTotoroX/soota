@@ -1,26 +1,7 @@
-# Soota 文章、分析与渲染
+# 分析与渲染迁移到 LoreLab
 
-Collection ends at `context.md`. Do not polish, rewrite, summarize or generate an article unless the user requested that output. Context is Agent input, not a reading document: it may retain fragments, repeated wording and awkward sentences.
+单来源分析、笔记、文章、大纲的写作指导及提交、校验、渲染和导出均由 LoreLab content 与 LoreLab Skill 维护。安装后用 `lorelab skills list` 找到 LoreLab Skill，按其 `references/content.md` 执行；不在独立 Soota 复制语义流程或 schema 指导。
 
-For a requested analysis or summary, read context in chunks and apply the selected prompt directly; do not create a full-article intermediate. Only an explicit detailed-article/reading request enables article composition. Then preserve the source's substance and reasoning, follow applicable local formatting rules, and do not substitute a short summary for the requested article. A saved prompt or older folder workflow does not itself authorize an extra article stage.
+新任务使用 `lorelab content ingest/resume/render/export`。旧 `soota render`、带语义目标或导出参数的 `soota ingest`、旧语义或交付任务的 `soota jobs resume` 仅作隐藏兼容转发，动态调用同一 Python 环境中的 LoreLab，不从 PATH 另选产品。未安装 LoreLab 时明确报需要安装，在修改任务、预算或产物前停止。兼容详情见[迁移说明](../../../docs/knowledge.md)。
 
-For supplied text that the user wants saved as concise, classified knowledge, use [knowledge workflow](knowledge.md). It preserves the paste, checks source evidence and relevant existing notes, and separates source-task completion from actual knowledge placement.
-
-Use `transcript.md` for timestamps and evidence IDs. For legacy bundles without context, read the transcript directly. Do not use an old reading article as the source transcript, invent facts/timestamps, or silently regenerate preserved stale articles.
-
-Use the output format and location specified by the user or local rules. A custom prompt may require sections that the built-in renderer cannot represent; do not drop or flatten them merely to fit its schema. Keep source transcripts and provenance available for verification, and do not overwrite user edits without authorization.
-
-For a standard Soota summary that fits the renderer, use existing segment IDs as evidence and write an Analysis JSON file matching `schemas/analysis.v1.json`:
-
-```json
-{
-  "schema_version": 1,
-  "summary": "...",
-  "key_points": [{"text": "...", "evidence": ["seg-000001"]}],
-  "chapters": [{"title": "...", "start_ms": 0, "end_ms": 12000, "summary": "..."}],
-  "tags": ["..."],
-  "language": "zh"
-}
-```
-
-Run `soota render --bundle PATH/manifest.json --analysis PATH/analysis.json --json` only for the requested analysis output. It writes `content.md` and analysis metadata without modifying source context or transcripts. Existing `content.md` requires an authorized `--force` replacement; invalid Analysis never overwrites it. Report the content path, and do not paste a long transcript into the final reply.
+Soota 采集默认到 context 结束，原文包与采集恢复独立可用。普通聊天总结可直接阅读 context，不要求文章前置、内容任务或知识库写入。保留旧 task/item 身份、source 证据、原路径和预算；兼容字段不意味着 Soota 仍执行语义处理。

@@ -68,10 +68,10 @@ def quote_rows(
 ) -> list[dict[str, Any]]:
     if capability not in CAPABILITIES:
         raise InputError("未知路由能力。")
-    bundled = json.loads(Path(__file__).with_name("monid").joinpath("prices.json").read_text())
+    bundled = json.loads(Path(__file__).with_name("monid").joinpath("prices.json").read_text(encoding="utf-8"))
     local_path = settings.config_dir / "provider-prices.json"
     try:
-        local = json.loads(local_path.read_text()) if local_path.is_file() else {}
+        local = json.loads(local_path.read_text(encoding="utf-8")) if local_path.is_file() else {}
         if not isinstance(local, dict) or any(not isinstance(v, dict) for k, v in local.items() if k != "as_of"):
             raise ValueError("invalid price cache")
     except ValueError as exc:

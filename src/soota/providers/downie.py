@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import shutil
 import sys
@@ -15,6 +14,7 @@ from soota.models import AudioAsset, MediaItem, RequestRecord, SourceRef
 from soota.providers.opencli_runtime import RuntimeUnavailable
 from soota.providers.process import run_process
 from soota.storage.cache import CacheStore
+from soota.storage.locking import lock_file
 
 
 class DownloadPending(TranscriptError):
@@ -36,7 +36,7 @@ class DownieProvider:
         dest = self.cache.audio_path(item.source)
         with (dest.parent / ".lock").open("a") as handle:
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file(handle, blocking=False)
             except BlockingIOError as exc:
                 raise DownloadPending("同一 Downie 任务仍在处理中，未重复提交。") from exc
             if dest.is_file() and dest.stat().st_size:
@@ -64,7 +64,7 @@ class DownieProvider:
             if not (folder / "request.json").is_file():
                 raise ContractError("Downie 任务记录缺失；未自动重提，请检查原任务。")
             try:
-                source = SourceRef.model_validate_json((folder / "request.json").read_text())
+                source = SourceRef.model_validate_json((folder / "request.json").read_text(encoding="utf-8"))
                 if source.cache_identity != item.source.cache_identity or not folder.name.startswith("soota-downie-"):
                     raise ValueError("source mismatch")
             except (ValueError, OSError) as exc:

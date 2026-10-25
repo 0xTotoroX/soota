@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import re
@@ -16,9 +15,11 @@ import httpx
 
 from soota.config import SootaSettings
 from soota.errors import ContractError, InputError, SourceError
+from soota.platform_support import npm_entry
 from soota.providers.opencli_patches import apply_managed_fixes
 from soota.providers.process import run_process
 from soota.storage.atomic import atomic_write
+from soota.storage.locking import lock_file, unlock_file
 
 PACKAGE = "@jackwener/opencli"
 REGISTRY = "https://registry.npmjs.org/@jackwener%2fopencli"
@@ -55,20 +56,20 @@ class OpenCLIRuntime:
         self.root.mkdir(parents=True, exist_ok=True)
         with (self.root / ".lock").open("a") as handle:
             try:
-                fcntl.flock(handle, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+                lock_file(handle, exclusive=exclusive, blocking=False)
             except BlockingIOError as exc:
                 raise SourceError("OpenCLI 正在执行或升级，请等本次操作结束后再试。") from exc
             try:
                 yield
             finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                unlock_file(handle)
 
     def state(self) -> dict[str, Any]:
         path = self.root / "state.json"
         if not path.is_file():
             return {}
         try:
-            state = json.loads(path.read_text())
+            state = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
                 raise ValueError
             for key in ("active", "previous"):
@@ -80,7 +81,7 @@ class OpenCLIRuntime:
 
     def managed_binary(self, version: str) -> Path:
         validate_version(version)
-        return self.root / "versions" / version / "node_modules" / ".bin" / self.command
+        return npm_entry(self.root / "versions" / version, self.command)
 
     def resolve(self) -> tuple[str, str]:
         explicit = self.configured_binary
@@ -175,7 +176,7 @@ class OpenCLIRuntime:
                             "OpenCLI 隔离安装失败；当前版本未切换。", details={"exit_code": result.returncode}
                         )
                     apply_managed_fixes(stage / "install")
-                    actual = self.probe(str(stage / "install" / "node_modules" / ".bin" / self.command))
+                    actual = self.probe(str(npm_entry(stage / "install", self.command)))
                     if actual != version:
                         raise ContractError("安装后的 OpenCLI 版本与请求版本不同。")
                     atomic_write(

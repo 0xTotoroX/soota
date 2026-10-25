@@ -6,6 +6,8 @@ import contextlib
 import importlib.metadata
 import json
 import sys
+from io import TextIOWrapper
+from typing import cast
 
 import httpx
 from tikhub import TikHub
@@ -48,6 +50,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # -I ignores PYTHON* variables; the worker protocol is always UTF-8, even when invoked directly.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        cast(TextIOWrapper, stream).reconfigure(encoding="utf-8")
     if sys.argv[1:] == ["--probe"]:
         probe()
     else:

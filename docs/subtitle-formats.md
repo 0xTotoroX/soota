@@ -72,7 +72,7 @@ VTT 使用 [webvtt-py](https://github.com/glut23/webvtt-py)，并校验其未覆
 
 - `context.md`：面向 Agent 的正文。按规范化字幕片段的原顺序输出，保留片段 ID、原文、重复和断句；不合并段落、不修辞、不纠错、不补写，也不插入摘要占位。
 - `transcript.md`：保留片段 ID 和来源实际存在的毫秒时间轴，供引用核对；没有时间时明确标记未知。精度以来源为限，旧秒格式不能恢复此前已丢失的小数信息。
-- `manifest.json`：来源、字幕状态、处理记录和文件索引；未请求分析时标记 `analysis.status=not_requested`。
+- `manifest.json`：来源、字幕状态、处理记录和文件索引；未请求分析时标记 `analysis.status=not_requested`，旧分析字段只作数据兼容。
 
 已有的明确过滤选项在 context 生成之前生效；启用推广过滤时仍保留 `transcript.original.md`。context 忠实于交给 Soota 的规范化片段，不承诺恢复上游已经删掉的字段。
 
@@ -81,16 +81,16 @@ flowchart LR
     A[获取字幕或本地转写] --> B[固定脚本解析格式]
     B --> C[context 正文]
     C -->|仅采集| D[结束]
-    C -->|明确要求分析或总结| E[Agent 直接分析 context]
-    C -->|明确要求详细文章阅读| F[Agent 整理完整文章]
+    C -->|聊天分析或总结| E[Agent 直接阅读与回答]
+    C -->|明确要求保存语义产物| F[Agent 写作 → LoreLab content 校验与渲染]
 ```
 
-单纯采集到 context 就结束。分析／总结任务可以直接使用 context，不先生成长文章。只有用户明确要求详细阅读文章时，才调用语言模型重组、润色和组织文章。固定脚本不承担这种语义处理，CLI 也不会自动读取提示词并调用语言模型。
+单纯采集到 context 就结束。分析／总结任务可以直接使用 context，不先生成长文章。只有用户明确要求详细阅读文章时，才由 Agent 重组、润色和组织文章；需要保存语义产物时通过 LoreLab content 提交。固定脚本不承担这种语义处理，CLI 也不会自动读取提示词并调用语言模型。
 
 新视频内容包的 JSON 返回 `data.context`；`ingest` 的旧 `data.content` 暂作兼容别名，指向同一个 context 文件。`catalog` 的 `data.content` 仍指向目录文件，不受此规则影响。旧包没有 context 时，Agent 读取 `transcript.md`，不把旧文章当作源正文。
 
 ## 可选阅读与分析产物
 
-`content.md` 仅作为显式阅读／分析输出。标准分析可由 Agent 生成 Analysis JSON，再用 `soota render --analysis ...` 排版；自定义完整文章按用户指定的格式与位置写出，不必压缩成摘要 schema。
+`content.md` 仅作为显式阅读／分析输出，由 LoreLab content 保存。标准分析和自定义文章的 schema 与写作指导在 LoreLab Skill 维护；新操作使用 `lorelab content render --bundle PATH --analysis PATH`，旧 `soota render` 只作隐藏兼容桥。独立 Soota 未安装 LoreLab 时明确报需要安装且不修改任务或产物；普通采集不受影响。
 
-`render` 不修改 context、字幕或过滤前原文；覆盖已有 `content.md` 需显式 `--force`。重新 `ingest` 即使使用 `--force` 也不会顺带改写旧文章；来源片段变化时只将已有分析标记为 `stale`。再次采集未取得可用正文时，默认返回 `source_preserved` 并保留已有有效源文件，不把旧内容冒充新采集成功的结果。
+LoreLab content 的 `render` 不修改 context、字幕或过滤前原文；覆盖已有 `content.md` 需显式 `--force`。重新 `ingest` 即使使用 `--force` 也不会顺带改写旧文章；来源片段变化时只将已有分析标记为 `stale`。再次采集未取得可用正文时，默认返回 `source_preserved` 并保留已有有效源文件，不把旧内容冒充新采集成功的结果。

@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import math
 from collections.abc import Callable, Iterator
@@ -22,6 +21,7 @@ from typing import Any
 from soota.errors import AuthBudgetError
 from soota.models import RequestRecord
 from soota.storage.atomic import atomic_write
+from soota.storage.locking import lock_file, unlock_file
 
 
 class TaskBudget:
@@ -37,7 +37,7 @@ class TaskBudget:
     def snapshot(self) -> dict[str, Any]:
         if not self.path.is_file():
             return {"reserved_cost_usd": "0", "requests": []}
-        return dict(json.loads(self.path.read_text()))
+        return dict(json.loads(self.path.read_text(encoding="utf-8")))
 
     def reserve(self, record: RequestRecord, before: Callable[[RequestRecord], None] | None = None) -> None:
         if not record.billed or record.cache_hit:
@@ -48,7 +48,7 @@ class TaskBudget:
         if price is None or not math.isfinite(price) or price < 0 or self.cap == 0:
             raise AuthBudgetError("任务禁止该计费请求：预算为零或价格未知。")
         with self._lock, (self.folder / "budget.lock").open("a") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            lock_file(handle)
             try:
                 saved = self.snapshot()
                 total = Decimal(saved["reserved_cost_usd"]) + Decimal(str(price))
@@ -60,7 +60,7 @@ class TaskBudget:
                 saved["requests"].append(record.model_dump(mode="json"))
                 atomic_write(self.path, json.dumps(saved, ensure_ascii=False, indent=2) + "\n")
             finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                unlock_file(handle)
 
 
 _ACTIVE: ContextVar[TaskBudget | None] = ContextVar("soota_task_budget", default=None)

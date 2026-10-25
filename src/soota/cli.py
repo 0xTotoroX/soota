@@ -1,7 +1,7 @@
 """Public Typer entry points.
 
 [INPUT]: Command arguments, settings and application command functions.
-[OUTPUT]: CLI commands including validated ingest/resume --workers options.
+[OUTPUT]: 采集与恢复命令；旧知识命令仅转交 LoreLab。
 [POS]: soota CLI adapter; task execution contracts live in tasks/ and docs/tasks.md.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
+from typer.core import TyperGroup
 
 from soota.api import platforms as platforms_cmd
 from soota.api_cli import app as api_app
@@ -27,6 +28,7 @@ from soota.pipeline import estimate as estimate_cmd
 from soota.pipeline import inspect as inspect_cmd
 from soota.pipeline import list_jobs as list_jobs_cmd
 from soota.pipeline import render as render_cmd
+from soota.platform_support import configure_stdio
 from soota.policy_cli import app as policy_app
 from soota.providers_cli import app as providers_app
 from soota.runtime_cli import app as runtime_app
@@ -35,10 +37,19 @@ from soota.tasks.entry import ingest as ingest_cmd
 from soota.tasks.runner import resume as resume_task_cmd
 from soota.updates_cli import app as updates_app
 
+
+class UTF8Group(TyperGroup):
+    def main(self, *args: Any, **kwargs: Any) -> Any:
+        # Configure before eager --help/usage handling, including the :app console entry.
+        configure_stdio()
+        return super().main(*args, **kwargs)
+
+
 app = typer.Typer(
+    cls=UTF8Group,
     add_completion=False,
     no_args_is_help=True,
-    help="Soota：给一个链接，搜集内容、补全字幕，留下可追溯 Markdown。",
+    help="Soota：采集正文、字幕和媒体，解析为可追溯的 context。",
 )
 jobs_app = typer.Typer(help="查看任务与续跑目录采集")
 app.add_typer(jobs_app, name="jobs")
@@ -49,6 +60,30 @@ app.add_typer(providers_app, name="providers")
 app.add_typer(features_app, name="features")
 app.add_typer(updates_app, name="updates")
 app.add_typer(mcp_app, name="mcp")
+
+
+@app.command(
+    "knowledge",
+    hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "help_option_names": []},
+)
+def knowledge(ctx: typer.Context) -> None:
+    """兼容旧命令，将原参数转交 LoreLab knowledge。"""
+    from soota.workflow_compat import forward
+
+    raise typer.Exit(forward(["knowledge", *ctx.args]))
+
+
+@app.command(
+    "study",
+    hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "help_option_names": []},
+)
+def study(ctx: typer.Context) -> None:
+    """兼容旧命令，将原参数转交 LoreLab study。"""
+    from soota.workflow_compat import forward
+
+    raise typer.Exit(forward(["study", *ctx.args]))
 
 
 @app.command()
@@ -155,7 +190,7 @@ def ingest(
         str | None,
         typer.Option(
             "--want",
-            help="目标产物，逗号分隔：video/audio/transcript/context/markdown/images/data/analysis/note/outline/article",
+            help="目标产物，逗号分隔：video/audio/transcript/context/markdown/images/data",
         ),
     ] = None,
     optional: Annotated[str | None, typer.Option("--optional", help="可选产物，失败不影响必需目标")] = None,
@@ -176,11 +211,11 @@ def ingest(
     max_bytes: Annotated[int, typer.Option("--max-bytes", help="单个媒体文件字节上限")] = 2 * 1024**3,
     max_pages: Annotated[int, typer.Option("--max-pages")] = 10,
     workers: Annotated[int, typer.Option("--workers", min=1, max=8, help="独立条目并发数；枚举仍有序")] = 1,
-    destination: Annotated[Path | None, typer.Option("--destination", help="另外导出到指定目录")] = None,
-    vault: Annotated[Path | None, typer.Option("--vault", help="显式 Obsidian Vault 目录")] = None,
-    subdir: Annotated[str, typer.Option("--subdir", help="Vault 内目录，不猜测分类")] = "Soota",
+    destination: Annotated[Path | None, typer.Option("--destination", hidden=True, help="另外导出到指定目录")] = None,
+    vault: Annotated[Path | None, typer.Option("--vault", hidden=True, help="显式 Obsidian Vault 目录")] = None,
+    subdir: Annotated[str, typer.Option("--subdir", hidden=True, help="Vault 内目录，不猜测分类")] = "Soota",
     provider: Annotated[
-        str | None, typer.Option("--provider", help="auto/opencli/yt-dlp/tikhub/monid/http/local/downie")
+        str | None, typer.Option("--provider", help="auto/opencli/yt-dlp/tikhub/monid/weir/http/local/downie")
     ] = None,
     fallback: Annotated[str | None, typer.Option("--fallback", help="显式允许 tikhub 兜底；仅已验证能力")] = None,
     transcript: Annotated[TranscriptMode, typer.Option("--transcript")] = TranscriptMode.AUTO,
@@ -190,6 +225,9 @@ def ingest(
     output: Annotated[Path | None, typer.Option("--output")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
     max_cost: Annotated[float | None, typer.Option("--max-cost")] = None,
+    weir_max_credits: Annotated[
+        int | None, typer.Option("--weir-max-credits", min=0, help="本任务 Weir credits 总上限")
+    ] = None,
     max_items: Annotated[int | None, typer.Option("--max-items")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     force: Annotated[bool, typer.Option("--force")] = False,
@@ -238,6 +276,7 @@ def ingest(
         audio_provider=audio_provider,
         output=output,
         max_cost=max_cost,
+        weir_max_credits=weir_max_credits,
         dry_run=dry_run,
         force=force,
         prefer_youtube=prefer_youtube,
@@ -246,7 +285,7 @@ def ingest(
     )
 
 
-@app.command()
+@app.command(hidden=True)
 def render(
     bundle: Annotated[Path, typer.Option("--bundle", help="manifest.json 或内容包目录")],
     analysis: Annotated[Path, typer.Option("--analysis", help="Analysis JSON")],
@@ -272,10 +311,13 @@ def jobs_resume(
     max_items: Annotated[int | None, typer.Option("--max-items", help="新的累计条数上限")] = None,
     max_pages: Annotated[int | None, typer.Option("--max-pages", help="新的累计页数上限")] = None,
     max_cost: Annotated[float | None, typer.Option("--max-cost", help="新的总费用上限，已有预留不会清零")] = None,
+    weir_max_credits: Annotated[
+        int | None, typer.Option("--weir-max-credits", min=0, help="新的 Weir credits 总上限，不清零历史用量")
+    ] = None,
     workers: Annotated[
         int | None, typer.Option("--workers", min=1, max=8, help="覆盖并保存条目并发数；默认沿用任务设置")
     ] = None,
-    analysis: Annotated[Path | None, typer.Option("--analysis", help="带任务身份与正文指纹的分析提交")] = None,
+    analysis: Annotated[Path | None, typer.Option("--analysis", hidden=True, help="兼容旧任务，转交 LoreLab")] = None,
     force: Annotated[bool, typer.Option("--force")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
@@ -286,6 +328,7 @@ def jobs_resume(
         max_items=max_items,
         max_pages=max_pages,
         max_cost=max_cost,
+        weir_max_credits=weir_max_credits,
         workers=workers,
         analysis=analysis,
         force=force,
@@ -303,6 +346,7 @@ def capabilities(
 
 
 def main() -> None:
+    configure_stdio()
     app()
 
 

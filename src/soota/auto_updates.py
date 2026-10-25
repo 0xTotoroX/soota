@@ -42,6 +42,12 @@ def should_update(
     if values.get("dry_run") or values.get("fetch") is False:
         return False
     if fn.__module__ == "soota.tasks.entry" and fn.__name__ == "ingest":
+        from soota.workflow_compat import ingest_needs_workflow
+
+        if ingest_needs_workflow(
+            values.get("want"), values.get("optional"), values.get("destination"), values.get("vault")
+        ):
+            return False  # LoreLab owns update policy for forwarded content tasks.
         if values.get("operation") is None:
             from soota.tasks.inputs import parse_inputs
 
@@ -50,6 +56,10 @@ def should_update(
                 return False
     if fn.__module__ == "soota.tasks.runner" and fn.__name__ == "resume":
         if values.get("analysis") is not None:
+            return False
+        from soota.workflow_compat import job_needs_workflow
+
+        if job_needs_workflow(settings, values["job_id"]):
             return False
         from soota.storage.jobs import JobStore
 
@@ -117,7 +127,7 @@ def automatic_update(settings: SootaSettings, *, force: bool = False) -> dict[st
         with lock.lock(exclusive=True):
             if not force and settings.updates.interval_seconds and state_path.is_file():
                 try:
-                    saved = json.loads(state_path.read_text())
+                    saved = json.loads(state_path.read_text(encoding="utf-8"))
                     if time.time() - saved["checked_at"] < settings.updates.interval_seconds:
                         return {**saved, "cached": True}
                 except (ValueError, KeyError, TypeError):

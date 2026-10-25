@@ -10,6 +10,7 @@ from typing import Any
 
 from soota.config import SootaSettings
 from soota.errors import ContractError, SourceError
+from soota.platform_support import venv_python
 from soota.providers.opencli_runtime import OpenCLIRuntime, package_metadata, validate_version
 from soota.providers.process import run_process
 from soota.storage.atomic import atomic_write
@@ -47,7 +48,7 @@ class TikHubRuntime(OpenCLIRuntime):
 
     def managed_binary(self, version: str) -> Path:
         validate_version(version)
-        return self.root / "versions" / version / "bin" / "python"
+        return venv_python(self.root / "versions" / version)
 
     def probe(self, binary: str) -> str:
         result = run_process([binary, "-I", str(WORKER), "--probe"], timeout=30, max_bytes=65536)

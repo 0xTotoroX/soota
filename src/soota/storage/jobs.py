@@ -12,6 +12,7 @@ from uuid import uuid4
 from soota.errors import InputError, SourceError, StorageError
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
+from soota.storage.locking import lock_file, unlock_file
 
 
 class JobStore:
@@ -60,19 +61,15 @@ class JobStore:
     @contextmanager
     def lock(self, job_id: str) -> Iterator[None]:
         # Kernel locks are released on exit, including an interrupted process.
-        try:
-            import fcntl
-        except ImportError as exc:
-            raise SourceError("目录续跑目前需要支持文件锁的 macOS 或 Linux。") from exc
         with self._path(job_id).with_suffix(".lock").open("a") as handle:
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file(handle, blocking=False)
             except BlockingIOError as exc:
                 raise SourceError("该任务正在另一个进程中运行。", hint="等待原进程结束后再续跑。") from exc
             try:
                 yield
             finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                unlock_file(handle)
 
     def list_jobs(self, limit: int | None = 50) -> list[dict[str, Any]]:
         files = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)

@@ -1,3 +1,9 @@
+"""[INPUT]: 采集正文、媒体和字幕目标。
+[OUTPUT]: 来源图片与字幕格式导出；不生成语义交接或分析产物。
+[POS]: Soota 原文产物层，后续内容整理归 LoreLab。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,15 +11,10 @@ import re
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
-from pydantic import ValidationError
-
-from soota.artifacts.analysis import AnalysisSubmission, render_analysis
 from soota.artifacts.bundle import (
     content_from_markdown,
-    load_bundle,
     load_transcript,
     save_bundle,
-    verify_artifacts,
     write_artifact,
     write_bundle,
 )
@@ -22,14 +23,9 @@ from soota.billing import selected_provider
 from soota.config import SootaSettings
 from soota.errors import InputError, SootaError, SourceError
 from soota.media import MediaDescriptor, MediaService
-from soota.models import AnalysisStatus, MediaItem, TranscriptMode, TranscriptSource
-from soota.storage.atomic import atomic_write
+from soota.models import MediaItem, TranscriptMode, TranscriptSource
 from soota.tasks.acquire import public_text
-from soota.tasks.models import InputSpec, StepState, TaskItem, TaskJob, TaskSpec
-from soota.tasks.state import (
-    _bundle_lock,
-    save_job,
-)
+from soota.tasks.models import InputSpec, TaskItem, TaskSpec
 
 
 def _export_subtitles(folder: Path, bundle: BundleV2, spec: TaskSpec) -> None:
@@ -75,35 +71,13 @@ def _export_subtitles(folder: Path, bundle: BundleV2, spec: TaskSpec) -> None:
         )
 
 
-def _handoff(folder: Path, bundle: BundleV2, spec: TaskSpec, job: TaskJob, row: TaskItem) -> None:
-    if not bundle.context_fingerprint:
-        raise SourceError("没有可供分析的正文，不能创建分析接续任务。")
-    request = {
-        "schema_version": 1,
-        "task_id": job.id,
-        "item_id": row.item_id,
-        "context": str(folder / "context.md"),
-        "context_fingerprint": bundle.context_fingerprint,
-        "requested_outputs": sorted(spec.wants & {"note", "article", "analysis", "outline"}),
-        "content_scope": bundle.content.scope if bundle.content else "transcript",
-        "submission_schema": AnalysisSubmission.model_json_schema(),
-        "instructions": "仅按本次明确目标生成分析或阅读文章；保留证据引用。导出到知识库时遵守目标目录约定。",
-        "resume": f"soota jobs resume {job.id} --analysis <submission.json> --json",
-    }
-    atomic_write(folder / "analysis-request.json", json.dumps(request, ensure_ascii=False, indent=2) + "\n")
-    if bundle.analysis.status != AnalysisStatus.READY:
-        bundle.analysis.status = AnalysisStatus.PENDING
-        save_bundle(folder, bundle)
-    row.steps["analysis"] = StepState(status="waiting_analysis", artifacts=["analysis-request.json"])
-
-
 def _images(
     settings: SootaSettings, spec: TaskSpec, seed: InputSpec, work: Path, folder: Path, bundle: BundleV2, row: TaskItem
 ) -> None:
     if bundle.content is None:
         raise SourceError("没有可供获取图片的正文。")
     references = work / "references.json"
-    private = json.loads(references.read_text()) if references.is_file() else {}
+    private = json.loads(references.read_text(encoding="utf-8")) if references.is_file() else {}
     raw_body = private.get("body", bundle.content.body_md)
     base = private.get("base", str(Path(seed.value).parent) if seed.kind == "file" else seed.value)
     matches = list(re.finditer(r"!\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)", raw_body))
@@ -168,36 +142,3 @@ def _images(
     save_bundle(folder, updated)
     if failures:
         raise SourceError("部分图片未能保存，已保留其余产物。", details={"failed_image_indexes": failures})
-
-
-def _apply_analysis(settings: SootaSettings, job: TaskJob, path: Path, *, force: bool) -> None:
-    paths = sorted(path.glob("*.json")) if path.is_dir() else [path]
-    for candidate in paths:
-        try:
-            submission = AnalysisSubmission.model_validate_json(candidate.read_text())
-        except (OSError, ValidationError) as exc:
-            raise InputError("分析提交不符合接续契约。") from exc
-        if submission.task_id != job.id:
-            raise InputError("分析提交的 task_id 不匹配。")
-        item = next((row for row in job.items if row.item_id == submission.item_id), None)
-        if item is None or item.bundle is None:
-            raise InputError("分析提交的 item_id 不匹配。")
-        folder = Path(item.bundle)
-        with _bundle_lock(folder):
-            previous = folder / "analysis.json"
-            same = False
-            if previous.is_file():
-                try:
-                    saved = AnalysisSubmission.model_validate_json(previous.read_text())
-                    bundle = load_bundle(folder)
-                    same = (
-                        saved == submission
-                        and not verify_artifacts(folder, bundle)
-                        and bundle.context_fingerprint == submission.context_fingerprint
-                    )
-                except (ValueError, OSError):
-                    same = False
-            if not same:
-                render_analysis(folder, submission, force=force)
-        item.steps["analysis"] = StepState(status="completed", provider="agent")
-        save_job(settings, job)

@@ -21,3 +21,8 @@ Monid YouTube captions use the reviewed single-video Apify tool. Bilibili captio
 ASR audio defaults to yt-dlp; `--audio-provider auto` uses the audio rule. Paid sources share the remaining budget. Monid saves run IDs and receipts; resume polls the original run. An ambiguous POST must not be blindly submitted again. Completed no-caption rows can still be charged; report returned actual fees separately from estimates, and do not equate HTTP 200 with complete subtitles.
 
 For the reviewed OpenCLI 1.8.8 Xiaohongshu search filter issue, the existing managed-patch command is `soota runtime update --version 1.8.8 --json`. Inspect the managed runtime's `soota-compatibility.json` for `xiaohongshu-search-filter-options`, source links and file hashes. Patches require unique known anchors and skip drift/partial matches. The patch filters noninteractive ghosts and merges only identical logical options; it does not skip default filters. Do not replace a compatible runtime with an unverified major release or modify global OpenCLI. Apply only after active runtime calls finish, and distinguish patch/contract checks from a real search and signed-note read.
+
+
+## Weir
+
+Weir is an optional REST body provider, separate from caption/API price ranking. `providers auth weir`, `providers enable/disable weir`, `providers limits weir --monthly-credits N --task-credits N` and `providers usage weir` manage credentials, local credit caps and offline accounting. `WEIR_API_KEY` overrides the local credential file. Current use is free-only; `policy auto` does not authorize purchased credits. Auto uses existing OpenCLI body capability first, and considers enabled Weir only before dispatch when that capability is unavailable. See [Weir contract](../../../docs/weir.md).

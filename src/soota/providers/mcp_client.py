@@ -7,12 +7,14 @@ import shutil
 import subprocess
 import threading
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from soota.config import OpenCLIMCPConfig
 from soota.errors import ContractError, InputError, SourceError
+from soota.platform_support import WINDOWS, command_argv, utf8_environment
 from soota.providers.mcp_contract import validate_read_command
 from soota.providers.opencli_runtime import RuntimeUnavailable
 
@@ -88,15 +90,19 @@ class StdioMCPClient:
         resolved = shutil.which(binary)
         if resolved is None:
             raise RuntimeUnavailable("opencli-mcp 未安装。", hint="安装并运行 opencli-mcp setup --clients none。")
-        try:
-            process = subprocess.Popen(
-                [resolved, "stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-            )
-        except OSError as exc:
-            raise RuntimeUnavailable("opencli-mcp 无法启动。") from exc
-        if process.stdin is None or process.stdout is None:
-            process.terminate()
-            raise RuntimeUnavailable("opencli-mcp 标准输入输出不可用。")
+        with self._process(command_argv([resolved, "stdio"])) as process:
+            return self._exchange(process, name, arguments, readonly_guard=readonly_guard, dry_run=dry_run)
+
+    def _exchange(
+        self,
+        process: subprocess.Popen[bytes],
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        readonly_guard: tuple[str, str, dict[str, Any], str | None] | None,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        assert process.stdin is not None and process.stdout is not None
         messages: queue.Queue[bytes] = queue.Queue()
         limit = self.config.max_output_bytes
 
@@ -166,6 +172,42 @@ class StdioMCPClient:
             )
             response = self._response(messages, call_id, self.config.timeout_seconds, dispatched=True)
             return self._decode_tool(response)
+        finally:
+            with suppress(OSError):
+                process.stdin.close()
+
+    @staticmethod
+    @contextmanager
+    def _process(argv: list[str]) -> Iterator[subprocess.Popen[bytes]]:
+        if WINDOWS:
+            from soota.providers.windows_process import windows_process
+
+            process = None
+            try:
+                with windows_process(argv, utf8_environment(), stderr=subprocess.DEVNULL) as process:
+                    try:
+                        yield process
+                    finally:
+                        assert process.stdin is not None
+                        process.stdin.close()
+                        # Let a completed stdio session handle EOF before closing its Job.
+                        with suppress(subprocess.TimeoutExpired):
+                            process.wait(timeout=3)
+            finally:
+                if process is not None:
+                    assert process.stdin is not None and process.stdout is not None
+                    process.stdin.close()
+                    process.stdout.close()
+            return
+        try:
+            process = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=utf8_environment()
+            )
+        except OSError as exc:
+            raise RuntimeUnavailable("opencli-mcp 无法启动。") from exc
+        assert process.stdin is not None and process.stdout is not None
+        try:
+            yield process
         finally:
             with suppress(OSError):
                 process.stdin.close()

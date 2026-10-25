@@ -35,7 +35,7 @@ def run_site(
     params: dict[str, Any] = {}
     if params_file:
         try:
-            params = json.loads(params_file.expanduser().read_text())
+            params = json.loads(params_file.expanduser().read_text(encoding="utf-8"))
             if not isinstance(params, dict):
                 raise ValueError
         except ValueError as exc:

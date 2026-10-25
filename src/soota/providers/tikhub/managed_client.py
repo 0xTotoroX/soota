@@ -20,7 +20,7 @@ class ManagedClient:
 
         payload = {**self.options, "method": method, "path": path, "params": params, "json": json}
         result = run_process(
-            [self.python, "-I", str(WORKER)],
+            [self.python, "-I", "-X", "utf8", str(WORKER)],
             timeout=self.timeout + 15,
             max_bytes=32_000_000,
             input_bytes=codec.dumps(payload).encode(),

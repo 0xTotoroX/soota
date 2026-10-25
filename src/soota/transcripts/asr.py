@@ -10,6 +10,7 @@ from typing import Protocol
 from soota.config import AsrConfig
 from soota.errors import TranscriptError
 from soota.models import CaptionPayload, TranscriptSegment
+from soota.platform_support import utf8_environment
 
 
 class AsrEngine(Protocol):
@@ -47,7 +48,9 @@ class WhisperCliEngine:
         ]
         if language:
             cmd.extend(["--language", _whisper_lang(language)])
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, check=False, capture_output=True, text=True, encoding="utf-8", env=utf8_environment()
+        )
         if result.returncode != 0:
             raise TranscriptError(
                 "whisper CLI 转写失败。",
@@ -124,7 +127,9 @@ class MlxWhisperEngine:
             ]
             if language:
                 cmd.extend(["--language", _whisper_lang(language)])
-            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd, check=False, capture_output=True, text=True, encoding="utf-8", env=utf8_environment()
+            )
             output = Path(folder) / "transcript.json"
             if result.returncode or not output.is_file():
                 raise TranscriptError(

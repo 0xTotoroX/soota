@@ -204,7 +204,7 @@ def read_params(params: list[str] | None, params_file: Path | None) -> dict[str,
     values: dict[str, Any] = {}
     if params_file:
         try:
-            values = json.loads(params_file.expanduser().read_text())
+            values = json.loads(params_file.expanduser().read_text(encoding="utf-8"))
             if not isinstance(values, dict):
                 raise ValueError
         except ValueError as exc:

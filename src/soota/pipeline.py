@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -39,7 +38,6 @@ from soota.providers.tikhub.capability import capabilities_for
 from soota.providers.tikhub.client import TikHubProvider
 from soota.providers.ytdlp import YtDlpProvider
 from soota.providers.ytdlp import capabilities_for as ytdlp_capabilities
-from soota.render.analysis import load_analysis
 from soota.render.bundle import write_bundle
 from soota.render.markdown import render_transcript
 from soota.routing import recognize
@@ -818,7 +816,7 @@ def ingest_free(
     CostLedger(settings.ledger_path).append(item.source.id, records)
     previous_manifest = output_root / item.source.platform / item.source.id / "manifest.json"
     if previous_manifest.is_file() and not force:
-        previous = ContentBundleManifest.model_validate_json(previous_manifest.read_text())
+        previous = ContentBundleManifest.model_validate_json(previous_manifest.read_text(encoding="utf-8"))
         old_filter = previous.metadata.get("provenance", {}).get("promotion_filter")
         if old_filter != filter_report:
             raise InputError("推广过滤结果变化；请使用新输出目录，或 --force 重建内容包，避免保留不匹配的旧总结。")
@@ -870,73 +868,11 @@ def ingest_free(
     )
 
 
-def render(
-    settings: SootaSettings,
-    *,
-    bundle: Path,
-    analysis: Path,
-    force: bool = False,
-) -> CommandResult:
-    manifest_path = bundle if bundle.name == "manifest.json" else bundle / "manifest.json"
-    if not manifest_path.is_file():
-        raise InputError("找不到 manifest.json。", hint="先 ingest 再 render。")
-    folder = manifest_path.parent
-    if json.loads(manifest_path.read_text()).get("schema_version") == 2:
-        from pydantic import ValidationError
+def render(settings: SootaSettings, *, bundle: Path, analysis: Path, force: bool = False) -> CommandResult:
+    """Compatibility entry; semantic rendering is owned by LoreLab."""
+    from soota.workflow_compat import invoke
 
-        from soota.artifacts.analysis import AnalysisSubmission, render_analysis
-
-        try:
-            submission = AnalysisSubmission.model_validate_json(analysis.read_text())
-        except ValidationError as exc:
-            raise InputError("v2 内容包需要带 context_fingerprint 的分析提交。") from exc
-        updated = render_analysis(folder, submission, force=force)
-        return CommandResult(
-            ok=True,
-            status="success",
-            code="ok",
-            exit_code=0,
-            message="分析产物已写入，原文保持不变。",
-            data={
-                "output": str(folder),
-                "manifest": str(manifest_path),
-                "context": str(folder / "context.md"),
-                "files": updated.files,
-            },
-        )
-    parsed = load_analysis(analysis)
-    manifest = ContentBundleManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
-    from soota.render.bundle import write_bundle_to
-
-    meta = manifest.metadata or {}
-    published = meta.get("published_at")
-    published_at = None
-    if isinstance(published, str) and published:
-        from datetime import datetime
-
-        published_at = datetime.fromisoformat(published)
-    item = MediaItem(
-        source=manifest.source,
-        title=meta.get("title"),
-        creator=meta.get("creator"),
-        published_at=published_at,
-        duration_seconds=meta.get("duration_seconds"),
-        language=meta.get("language"),
-    )
-    document = _document_from_transcript_md(folder / "transcript.md", manifest)
-    write_bundle_to(folder, item, document, manifest, parsed, force=force)
-    return CommandResult(
-        ok=True,
-        status="success",
-        code="ok",
-        exit_code=0,
-        message="已渲染 content.md。",
-        data={
-            "content": str(folder / "content.md"),
-            "context": str(folder / "context.md") if (folder / "context.md").is_file() else None,
-            "manifest": str(manifest_path),
-        },
-    )
+    return invoke("render", settings, bundle=bundle, analysis=analysis, force=force)
 
 
 def _document_from_transcript_md(path: Path, manifest: ContentBundleManifest) -> TranscriptDocument:

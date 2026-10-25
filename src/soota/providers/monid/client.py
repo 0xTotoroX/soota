@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import math
@@ -23,6 +22,7 @@ from soota.config import SootaSettings
 from soota.errors import AuthBudgetError, ContractError, SourceError
 from soota.models import RequestRecord
 from soota.storage.atomic import atomic_write
+from soota.storage.locking import lock_file
 from soota.storage.task_budget import active_task_identity, reserve_active_task
 
 APIFY_CAPTIONS = "/starvibe/youtube-video-transcript"
@@ -31,7 +31,7 @@ APIFY_CAPTIONS = "/starvibe/youtube-video-transcript"
 def load_key(settings: SootaSettings) -> str:
     key = os.environ.get("MONID_API_KEY", "").strip()
     path = settings.config_dir / "credentials" / "monid.key"
-    return key or (path.read_text().strip() if path.is_file() else "")
+    return key or (path.read_text(encoding="utf-8").strip() if path.is_file() else "")
 
 
 def usd(value: Any) -> float:
@@ -117,8 +117,8 @@ class MonidClient:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.root / (digest + ".json")
         with (self.root / (digest + ".lock")).open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            saved = json.loads(path.read_text()) if path.is_file() else {}
+            lock_file(lock)
+            saved = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
             if saved.get("response", {}).get("status") in {"COMPLETED", "FAILED"} and not reuse:
                 saved = {}
             if not saved:

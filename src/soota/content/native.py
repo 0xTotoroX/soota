@@ -1,3 +1,10 @@
+"""
+[INPUT]: Runtime capability registry, URL and explicit provider.
+[OUTPUT]: Reviewed native operations, body and media results.
+[POS]: Acquisition routing; Weir body fallback only before OpenCLI dispatch.
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import math
@@ -185,17 +192,34 @@ def convert_content(result: NativeOperation, source_url: str, *, result_schema: 
     )
 
 
-def capture_content(settings: SootaSettings, url: str, workdir: Path, *, provider: str = "auto") -> NativeContent:
+def capture_content(
+    settings: SootaSettings, url: str, workdir: Path, *, provider: str = "auto", allow_credits: bool = True
+) -> NativeContent:
+    from soota.billing import provider_enabled
+    from soota.content.weir import capture as capture_weir
+    from soota.content.weir import supports as weir_supports
+    from soota.providers.opencli_runtime import RuntimeUnavailable
+
+    if provider == "weir":
+        return capture_weir(settings, url, allow_credits=allow_credits)
     if provider not in {"auto", "opencli"}:
-        raise InputError("正文采集目前支持 auto/opencli；其他 Provider 可走原生操作通道。")
-    commands = {row["command"]: row for row in opencli_commands.commands(settings)}
+        raise InputError("正文采集支持 auto/opencli/weir；其他 Provider 可走原生操作通道。")
+    commands = {}
+    if provider == "opencli" or provider_enabled(settings, "opencli"):
+        try:
+            commands = {row["command"]: row for row in opencli_commands.commands(settings)}
+        except RuntimeUnavailable:
+            if provider == "opencli":
+                raise
     for operation, params in content_candidates(url):
         command = commands.get(operation)
         if command is not None and command["access"] == "read":
-            # Fall back only during capability selection, never after a dispatched failure.
+            # Capability fallback only; never retry a dispatched failure elsewhere.
             result = _dispatch(settings, command, params, workdir)
             return convert_content(result, url)
-    raise SourceError("当前 OpenCLI 没有可用的正文命令。")
+    if provider == "auto" and provider_enabled(settings, "weir") and weir_supports(url):
+        return capture_weir(settings, url, allow_credits=allow_credits)
+    raise SourceError("当前没有可用的正文命令；可显式启用并选择 Weir 获取 X/Reddit 正文。")
 
 
 def capture_media(settings: SootaSettings, url: str, workdir: Path, *, provider: str = "auto") -> NativeMedia:

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import shutil
 import signal
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
@@ -22,7 +20,7 @@ from soota.tasks import runner, scheduler
 from soota.tasks.entry import ingest
 from soota.tasks.models import TaskJob
 from soota.tasks.runner import resume
-from soota.tasks.state import _bundle_lock, load_spec, save_job, task_folder
+from soota.tasks.state import load_spec, save_job, task_folder
 
 
 def local_batch(tmp_path, count):
@@ -374,112 +372,3 @@ def test_cli_workers_validation_plan_and_resume(settings, tmp_path, monkeypatch)
     result = cli.invoke(app, ["jobs", "resume", job_id, "--workers", "3", "--json"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["data"]["workers"] == 3
-
-
-def test_parallel_note_outline_handoff_directory_and_idempotent_cli_resume(settings, tmp_path, monkeypatch):
-    inputs, paths = local_batch(tmp_path, 3)
-    originals = [path.read_bytes() for path in paths]
-    monkeypatch.setattr("soota.config.load_settings", lambda: settings)
-    cli = CliRunner()
-    first = cli.invoke(
-        app,
-        [
-            "ingest",
-            "--inputs-file",
-            str(inputs),
-            "--provider",
-            "local",
-            "--want",
-            "context,note,outline",
-            "--workers",
-            "2",
-            "--max-cost",
-            "0",
-            "--json",
-        ],
-    )
-    result = json.loads(first.stdout)
-    assert first.exit_code == 2 and result["data"]["job_status"] == "waiting_analysis"
-    submissions = tmp_path / "submissions"
-    submissions.mkdir()
-    contexts = {}
-    for i, row in enumerate(result["data"]["items"]):
-        folder = Path(row["bundle"])
-        request = json.loads((folder / "analysis-request.json").read_text())
-        assert request["item_id"] == row["item_id"]
-        assert request["requested_outputs"] == ["note", "outline"]
-        manifest = json.loads((folder / "manifest.json").read_text())
-        evidence = manifest["content"]["blocks"][0]["block_id"]
-        contexts[folder] = (folder / "context.md").read_bytes()
-        payload = {key: request[key] for key in ("task_id", "item_id", "context_fingerprint")}
-        payload.update(
-            note_markdown=f"# Note {i}\n\nSource {i}. [evidence](context.md#{evidence})",
-            outline_markdown=f"# Outline {i}\n\n- Source {i}. [evidence](context.md#{evidence})",
-        )
-        (submissions / f"{row['item_id']}.json").write_text(json.dumps(payload))
-    monkeypatch.setattr(runner, "collect_text", lambda *a, **k: pytest.fail("resume reacquired saved source"))
-    args = ["jobs", "resume", result["data"]["job_id"], "--analysis", str(submissions), "--workers", "3", "--json"]
-    for _ in range(2):
-        done = cli.invoke(app, args)
-        assert done.exit_code == 0, done.output
-        saved = json.loads(done.stdout)
-        assert saved["data"]["reserved_cost_usd"] == 0
-        assert all(row["status"] == "completed" for row in saved["data"]["items"])
-    for folder, context in contexts.items():
-        assert (folder / "context.md").read_bytes() == context
-        assert (folder / "note.md").is_file() and (folder / "outline.md").is_file()
-        assert not (folder / "content.md").exists()
-    assert [path.read_bytes() for path in paths] == originals
-
-
-def test_distinct_bundles_with_same_export_target_are_serialized(settings, tmp_path, monkeypatch):
-    inputs, paths = local_batch(tmp_path, 1)
-    first = ingest(settings, str(paths[0]), want="context")
-    first_bundle = Path(first.data["output"])
-    other_bundle = tmp_path / "copied-bundle"
-    shutil.copytree(first_bundle, other_bundle)
-    inputs.write_text(json.dumps([str(first_bundle), str(other_bundle)]))
-    step = runner._step
-    export = runner.export_bundle
-    barrier = threading.Barrier(2, timeout=10)
-    lock = threading.Lock()
-    active = peak = 0
-
-    def together(config, job, row, name, action):
-        if name == "export":
-            barrier.wait()
-        return step(config, job, row, name, action)
-
-    def slow_export(*args, **kwargs):
-        nonlocal active, peak
-        with lock:
-            active += 1
-            peak = max(active, peak)
-        try:
-            time.sleep(0.05)
-            return export(*args, **kwargs)
-        finally:
-            with lock:
-                active -= 1
-
-    monkeypatch.setattr(runner, "_step", together)
-    monkeypatch.setattr(runner, "export_bundle", slow_export)
-    result = ingest(settings, inputs_file=inputs, want="context", workers=2, destination=tmp_path / "export")
-    assert result.ok, result.model_dump()
-    assert peak == 1
-    targets = {row["data"]["export"] for row in result.data["items"]}
-    assert len(targets) == 1
-    assert (Path(targets.pop()) / "context.md").is_file()
-
-
-def test_export_cannot_write_a_destination_in_use_as_another_bundle(settings, tmp_path):
-    _, paths = local_batch(tmp_path, 1)
-    first = ingest(settings, str(paths[0]), want="context", destination=tmp_path / "export")
-    assert first.ok
-    target = Path(first.data["export"])
-    before = {p.name: p.read_bytes() for p in target.iterdir() if p.is_file()}
-    with _bundle_lock(target):
-        result = ingest(settings, str(paths[0]), want="context", workers=2, destination=tmp_path / "export")
-    assert result.data["job_status"] == "partial"
-    assert result.data["items"][0]["steps"]["export"]["status"] == "failed"
-    assert {p.name: p.read_bytes() for p in target.iterdir() if p.is_file()} == before

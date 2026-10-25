@@ -1,3 +1,10 @@
+"""
+[INPUT]: Task inputs, provider policy and artifact goals.
+[OUTPUT]: Raw source text, transcript or media collection results.
+[POS]: Shared task acquisition; Weir USD-zero policy reaches body capture.
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import json
@@ -244,7 +251,7 @@ def _collect_text(
             )
         service = MediaService(settings, work / "media", max_bytes=spec.max_bytes)
         if media is None and path.suffix.lower() == ".json":
-            payload = json.loads(path.read_text())
+            payload = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(payload, dict) and isinstance(payload.get("media"), dict):
                 media = service.from_descriptor(checked_descriptor(settings, spec, payload["media"]), kind="audio")
         asset = media or service.from_file(path)
@@ -293,13 +300,15 @@ def _collect_text(
             record_job=False,
             audio_asset=audio_asset,
         )
-        manifest = ContentBundleManifest.model_validate_json(Path(result.data["manifest"]).read_text())
+        manifest = ContentBundleManifest.model_validate_json(Path(result.data["manifest"]).read_text(encoding="utf-8"))
         if manifest.transcript.status != TranscriptStatus.READY:
             raise SourceError(
                 "尚未取得可用字幕正文。",
                 details={"transcript_status": manifest.transcript.status.value, "result": result.data},
             )
-        document = parse_transcript_markdown(Path(result.data["transcript"]).read_text(), manifest.transcript)
+        document = parse_transcript_markdown(
+            Path(result.data["transcript"]).read_text(encoding="utf-8"), manifest.transcript
+        )
         item = MediaItem(
             source=source,
             title=manifest.metadata.get("title"),
@@ -312,7 +321,7 @@ def _collect_text(
             item.provenance["transcript_source_identity"] = manifest.source.cache_identity
         original_path = Path(result.data["output"]) / "transcript.original.md"
         original_document = (
-            parse_transcript_markdown(original_path.read_text(), manifest.transcript)
+            parse_transcript_markdown(original_path.read_text(encoding="utf-8"), manifest.transcript)
             if original_path.is_file()
             else None
         )
@@ -324,7 +333,9 @@ def _collect_text(
             diagnostics=result.data,
         )
     else:
-        native = capture_content(settings, seed.value, work / "content", provider=spec.provider)
+        native = capture_content(
+            settings, seed.value, work / "content", provider=spec.provider, allow_credits=spec.max_cost != 0
+        )
     item = safe_item(
         item.model_copy(
             update={
@@ -390,7 +401,7 @@ def collect_text(
             known = next((a for a in bundle.artifacts if a.path == "transcript.original.md"), None)
             if known is not None and file_sha256(original_path) != known.sha256:
                 raise InputError("过滤前原文已被修改，未覆盖或自动继续过滤。")
-            result.document = parse_transcript_markdown(original_path.read_text(), bundle.transcript)
+            result.document = parse_transcript_markdown(original_path.read_text(encoding="utf-8"), bundle.transcript)
         result.original_document = result.document
         result.document, report, warnings = filter_promotions(
             result.item,
@@ -442,7 +453,7 @@ def collect_media(
     if seed.kind == "file":
         path = Path(seed.value)
         if path.suffix.lower() == ".json":
-            payload = json.loads(path.read_text())
+            payload = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(payload, dict) and isinstance(payload.get("media"), dict):
                 return MediaBatch(
                     [

@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 from collections.abc import Iterator
@@ -19,6 +18,7 @@ from soota.config import SootaSettings
 from soota.errors import InputError, SourceError
 from soota.storage.atomic import atomic_write
 from soota.storage.jobs import JobStore
+from soota.storage.locking import lock_file, unlock_file
 from soota.tasks.inputs import file_fingerprint, source_for
 from soota.tasks.models import InputSpec, TaskItem, TaskJob, TaskSpec
 
@@ -47,7 +47,7 @@ def create_job(settings: SootaSettings, spec: TaskSpec) -> TaskJob:
 def load_spec(settings: SootaSettings, job_id: str) -> TaskSpec:
     path = task_folder(settings, job_id) / "request.json"
     try:
-        return TaskSpec.model_validate_json(path.read_text())
+        return TaskSpec.model_validate_json(path.read_text(encoding="utf-8"))
     except (ValueError, OSError) as exc:
         raise InputError("任务请求记录缺失或格式无效。") from exc
 
@@ -69,7 +69,7 @@ def save_job(settings: SootaSettings, job: TaskJob, *, item: TaskItem | None = N
 def resolved_inputs(settings: SootaSettings, job: TaskJob) -> list[InputSpec]:
     path = task_folder(settings, job.id) / "inputs.json"
     try:
-        return [InputSpec.model_validate(row) for row in json.loads(path.read_text())]
+        return [InputSpec.model_validate(row) for row in json.loads(path.read_text(encoding="utf-8"))]
     except (ValueError, OSError) as exc:
         raise InputError("展开后的任务输入缺失或格式无效。") from exc
 
@@ -112,10 +112,10 @@ def _bundle_lock(folder: Path) -> Iterator[None]:
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / ".task.lock").open("a") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file(handle, blocking=False)
         except BlockingIOError as exc:
             raise SourceError("同一内容包正在另一个任务中处理。") from exc
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            unlock_file(handle)

@@ -356,7 +356,7 @@ class MediaService:
         if not receipt.is_file() or receipt.stat().st_size > 1_048_576:
             return None
         try:
-            saved = MediaAsset.model_validate_json(receipt.read_text())
+            saved = MediaAsset.model_validate_json(receipt.read_text(encoding="utf-8"))
             if not saved.path.resolve().is_relative_to((self.root / "objects").resolve()) or saved.path.is_symlink():
                 return None
             expected = options["expected_duration"]

@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -10,6 +11,7 @@ from soota.cli import app
 from soota.config import PaymentConfig, load_settings
 from soota.errors import ContractError, SourceError
 from soota.pipeline import ingest, inspect, render
+from soota.platform_support import npm_entry, venv_python
 from soota.providers.managed import WORKER, MCPRuntime, TikHubRuntime, bind_runtimes
 from soota.providers.opencli_runtime import OpenCLIRuntime
 from soota.providers.process import ProcessResult, run_process
@@ -54,8 +56,8 @@ def test_updates_all_packages_but_does_not_enable_mcp(settings, monkeypatch):
     report = automatic_update(settings)
     assert [r["status"] for r in report["providers"]] == ["updated"] * 3
     assert not settings.opencli_mcp.enabled
-    assert settings.opencli_mcp.runtime_binary.endswith("opencli-mcp")
-    assert settings.tikhub.runtime_python.endswith("bin/python")
+    assert Path(settings.opencli_mcp.runtime_binary).name == npm_entry(Path(), "opencli-mcp").name
+    assert Path(settings.tikhub.runtime_python).name == venv_python(Path()).name
     assert all(r["status"] == "current" for r in automatic_update(settings)["providers"])
 
 
@@ -115,7 +117,7 @@ def test_cli_updates_then_uses_same_settings_and_emits_single_json(settings, mon
     monkeypatch.setattr("soota.cli.inspect_cmd", collect)
     result = CliRunner().invoke(app, ["inspect", "https://example.com", "--json"])
     assert result.exit_code == 0, result.output
-    assert events[0].endswith("3.0.0/bin/python")
+    assert Path(events[0]) == venv_python(TikHubRuntime(settings).root / "versions" / "3.0.0")
     assert len(json.loads(result.stdout)["data"]["runtime_updates"]["providers"]) == 3
 
 
@@ -175,7 +177,7 @@ def test_sdk_failed_probe_does_not_activate_or_change_existing_env(settings, mon
         runtime.update("3.0.0")
     assert runtime.state()["active"] == "2.0.0"
     bind_runtimes(settings)
-    assert settings.tikhub.runtime_python.endswith("2.0.0/bin/python")
+    assert Path(settings.tikhub.runtime_python) == runtime.managed_binary("2.0.0")
 
 
 def test_estimates_remain_offline(settings):

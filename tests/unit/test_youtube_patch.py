@@ -111,7 +111,8 @@ def test_live_player_url_before_capture_with_bounded_failure_and_identity_checks
     node = shutil.which("node")
     if not node:
         pytest.skip("Node required for the managed JavaScript runtime regression")
-    source = """
+    source = (
+        """
 import assert from 'node:assert/strict';
 let state;
 const location = { origin: 'https://www.youtube.com' };
@@ -133,7 +134,9 @@ async function extract() {
         if (state.failure) throw new Error(state.failure);
         return {ok: state.ok !== false, text: async () => state.body};
     };
-""" + YOUTUBE_LIVE_TRACK_ANCHOR + """
+"""
+        + YOUTUBE_LIVE_TRACK_ANCHOR
+        + """
             state.captureCalls++;
           }
           return null;
@@ -192,6 +195,7 @@ if (EXPECT_SUCCESS) {
     }
 }
 """
+    )
     path = tmp_path / RELATIVE
     path.parent.mkdir(parents=True)
     path.write_text(source)

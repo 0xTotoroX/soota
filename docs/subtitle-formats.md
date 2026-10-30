@@ -1,6 +1,6 @@
 # 字幕格式与 context
 
-核对日期：2026-10-04。表中“工具能力”与“Soota 当前使用”分别列出；实际可取格式还取决于站点、版本和具体字幕轨道。
+treg 条目核对日期：2026-10-28；其余来源记录日期：2026-10-04。表中“工具能力”与“Soota 当前使用”分别列出；实际可取格式还取决于站点、版本和具体字幕轨道。
 
 ## 工具与格式
 
@@ -10,9 +10,10 @@
 | yt-dlp：YouTube | JSON3、SRV1、SRV2、SRV3、TTML、SRT、VTT | 按所选轨道可用格式取一份，首选 JSON3 |
 | yt-dlp：Bilibili 普通视频 | 将 B站字幕 JSON 转为 SRT；另有弹幕 XML | SRT，排除弹幕 |
 | TikHub：YouTube | JSON3、XML、SRT、TXT | SRT |
+| treg：YouTube / Crawl4AI | start_s/duration_s/text 片段 JSON | `crawl4ai-youtube`，秒制时间 |
+| treg：YouTube / ScrapeCreators | startMs/endMs/text 片段 JSON | `scrapecreators-youtube`，毫秒字符串；语言名称不能当语言代码 |
 | Monid：YouTube / Apify | start/duration/text 片段 JSON | `youtube-transcript` |
-| Monid：Bilibili / TikHub | 同 TikHub Bilibili | `youtube-transcript` | 秒制 start/duration 与 text 片段数组；不补造缺失结束时间 |
-| `bilibili-json` |
+| Monid：Bilibili / TikHub | 同 TikHub Bilibili | `bilibili-json` |
 | TikHub：Bilibili | 字幕信息 JSON，以及字幕地址指向的 B站原生 JSON | 字幕 `body` JSON |
 | Downie 4 | 默认 SRT；可设置保留站点原格式，官方没有列出固定的原始格式全集 | 未接入字幕采集，只作可选媒体／音频来源 |
 | Whisper／MLX Whisper：本地生成 | JSON、SRT、VTT、TXT、TSV；Whisper 当前上游另有 JSONL | JSON 中的识别片段 |
@@ -50,6 +51,8 @@ OpenCLI 的 JSON 是它自己的行结构，不是 YouTube JSON3。它的 raw �
 | `srv3` | `timedtext/body/p`，t/d 为毫秒；读取 s 文本，保留有正文的 append 事件，忽略无正文窗口控制 |
 | `xml` | 按以上已知 XML 结构识别 SRV 或 TTML；未知 XML、弹幕及 HTML 报错 |
 | `json3` | YouTube events/segs；保留每个文字事件的顺序、重复与换行，不做滚动字幕去重 |
+| `crawl4ai-youtube` | 秒制 start_s/duration_s 与 text；保留实际语言和可靠轨道类型 |
+| `scrapecreators-youtube` | 毫秒制 startMs/endMs 与 text；无可靠语言代码、轨道类型时保留未知 |
 | `youtube-transcript` | 秒制 start/duration 与 text 片段数组；不补造缺失结束时间 |
 | `bilibili-json` | B站 body/from/to/content |
 | `opencli-youtube`、`opencli-bilibili`、`opencli-mcp` | 各自明确的逐段 JSON 字段结构；保留未知的实际语言与轨道来源 |

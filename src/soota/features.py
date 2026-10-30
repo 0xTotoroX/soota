@@ -18,6 +18,7 @@ from soota.providers.mcp_client import StdioMCPClient, require_enabled
 from soota.providers.opencli_mcp import READ_COMMANDS, OpenCLIMCPProvider
 from soota.providers.opencli_runtime import RuntimeUnavailable
 from soota.providers.priority import NAMES, quote_rows, rule_for
+from soota.providers.quotes import online_prices
 from soota.providers.tikhub.registry import load_registry
 from soota.secrets import CREDENTIAL_FIELDS
 from soota.storage.atomic import atomic_write
@@ -47,11 +48,11 @@ def list_features(
     if provider == "soota":
         provider = "yt-dlp"
     if (
-        provider not in {None, "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid"}
+        provider not in {None, "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"}
         or not 1 <= limit <= 5000
         or offset < 0
     ):
-        raise InputError("provider 支持 opencli-mcp/opencli/yt-dlp/tikhub/monid；limit 为 1–5000，offset 非负。")
+        raise InputError("provider 支持 opencli-mcp/opencli/yt-dlp/tikhub/monid/treg；limit 为 1–5000，offset 非负。")
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     if settings.opencli_mcp.enabled and provider in {None, "opencli-mcp"}:
@@ -72,13 +73,13 @@ def list_features(
                     "plans": [{"provider": "opencli-mcp", "operation": operation}],
                 }
             )
-    for paid_name in ("tikhub", "monid"):
-        if paid_name == "monid" and provider is None and not provider_enabled(settings, "monid"):
+    for paid_name in ("tikhub", "monid", "treg"):
+        if paid_name in {"monid", "treg"} and provider is None and not provider_enabled(settings, paid_name):
             continue
         if provider not in {None, paid_name}:
             continue
         for endpoint in load_registry().preferred():
-            if paid_name == "monid":
+            if paid_name in {"monid", "treg"}:
                 source = SourceRef(platform=endpoint.platform, kind="query", id="feature", url="", canonical_url="")
                 if not quote_rows(settings, source, "api", [paid_name], endpoint=endpoint.path)[0]["supported"]:
                     continue
@@ -135,10 +136,12 @@ def alias_view(settings: SootaSettings, alias: FeatureAlias, *, preferred: str |
     endpoint = load_registry().resolve(alias.tikhub)
     source = SourceRef(platform=endpoint.platform, kind="query", id="feature", url="", canonical_url="")
     quotes = {
-        row["provider"]: row for row in quote_rows(settings, source, "api", ["tikhub", "monid"], endpoint=endpoint.path)
+        row["provider"]: row
+        for row in quote_rows(settings, source, "api", ["tikhub", "monid", "treg"], endpoint=endpoint.path)
     }
-    if quotes["monid"]["supported"]:
-        plans.append({"provider": "monid", "operation": alias.tikhub})
+    for name in ("monid", "treg"):
+        if quotes[name]["supported"]:
+            plans.append({"provider": name, "operation": alias.tikhub})
     rule = rule_for(settings, endpoint.platform, "inspect" if alias.id.endswith("video.detail") else "api")
     order = list(rule.order) + [name for name in NAMES if name not in rule.order]
 
@@ -185,8 +188,12 @@ def show_feature(settings: SootaSettings, selector: str) -> CommandResult:
             "opencli-mcp 已核验只读功能。",
             {"feature": {"id": selector, "site": site_name, "command": command_name, "access": "read"}},
         )
-    if selector.startswith(("tikhub.", "monid.")):
+    if selector.startswith(("tikhub.", "monid.", "treg.")):
         endpoint = load_registry().resolve(selector.split(".", 1)[1])
+        if selector.startswith("treg."):
+            from soota.providers.treg.catalog import resolve
+
+            resolve(endpoint.path)
         return success(
             "供应商原生功能契约。",
             {
@@ -333,6 +340,7 @@ def _native_mcp(settings: SootaSettings, selector: str, params: dict[str, Any], 
     )
 
 
+@online_prices
 def call_feature(
     settings: SootaSettings,
     selector: str,
@@ -350,18 +358,18 @@ def call_feature(
     if provider == "soota":
         provider = "yt-dlp"
     chosen = selected_provider(settings, provider)
-    if chosen not in {"auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid"}:
-        raise InputError("provider 支持 auto/opencli-mcp/opencli/yt-dlp/tikhub/monid。")
+    if chosen not in {"auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"}:
+        raise InputError("provider 支持 auto/opencli-mcp/opencli/yt-dlp/tikhub/monid/treg。")
     if output is not None and output.expanduser().exists() and not dry_run:
         raise InputError("输出文件已存在。", hint="请使用新的 --output 路径，避免覆盖已有结果。")
-    if selector.startswith(("tikhub.", "monid.")):
+    if selector.startswith(("tikhub.", "monid.", "treg.")):
         native_provider = selector.split(".", 1)[0]
         if provider not in {None, "auto", native_provider}:
             raise InputError("原生功能标识与显式 Provider 不一致。")
         return call_endpoint(
             settings,
             selector.split(".", 1)[1],
-            provider_name="monid" if selector.startswith("monid.") else "tikhub",
+            provider_name=native_provider,
             params=params,
             params_file=params_file,
             body_file=body_file,
@@ -374,11 +382,11 @@ def call_feature(
     values = read_params(params, params_file)
     secrets = [str(value) for key, value in values.items() if key.lower() in CREDENTIAL_FIELDS]
     if body_file:
-        raise InputError("--body 仅适用于 tikhub.* 或 monid.* 原生功能。")
+        raise InputError("--body 仅适用于 tikhub.*、monid.* 或 treg.* 原生功能。")
     if selector.startswith("opencli."):
         raise InputError("OpenCLI 原生命令映射已移除。", hint="直接调用 OpenCLI，或选择 Soota 的统一业务入口。")
     elif selector.startswith("opencli-mcp."):
-        if provider in {"opencli", "yt-dlp", "tikhub", "monid"}:
+        if provider in {"opencli", "yt-dlp", "tikhub", "monid", "treg"}:
             raise InputError("原生 opencli-mcp 功能不能指定其他 Provider；请选择统一功能 id。")
         result = _native_mcp(settings, selector, values, dry_run=dry_run)
     else:

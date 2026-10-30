@@ -56,8 +56,8 @@ class MonidProvider(TikHubProvider):
         response = self.monid.run("tikhub", path, inputs)
         return response.get("output")
 
-    def endpoint_price(self, endpoint: ApiEndpoint) -> float:
-        cost = quote_cost(self.monid.inspect("tikhub", endpoint.path))
+    def endpoint_price(self, endpoint: ApiEndpoint, *, refresh: bool = False) -> float:
+        cost = quote_cost(self.monid.inspect("tikhub", endpoint.path, refresh=refresh))
         self.snapshot.setdefault("endpoints", {})[endpoint.path] = cost
         return cost
 

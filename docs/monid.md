@@ -37,6 +37,8 @@ soota providers disable monid
 
 ## 按能力比较费用
 
+本表比较 TikHub 与 Monid；已启用 treg 时也参与同一规则，见 [treg 能力与价格基准](treg.md)。
+
 内置报价快照日期为 2026-10-12，来源是官方接口目录及报价元数据。以下为无缓存的一次请求链预估，不含重试、音频转写、折扣或免费额度抵扣。价格不保证长期不变。
 
 | 能力 | TikHub 直连 | Monid | 默认付费来源顺序 |
@@ -48,7 +50,7 @@ soota providers disable monid
 
 字幕接口可能直接返回正文，或查询一次就确认无字幕，因此实付可能低于完整链预估。Monid/Apify 的空字幕错误对象也可能计为一个结果：`COMPLETED` 与 HTTP 200 不代表取得可用字幕，更不代表免费。Soota 记录上游 `runId`、实际 Provider、供应商、预估和返回的实际费用；没有账单依据的实际费用保持未知。
 
-`providers priority show PLATFORM CAPABILITY --refresh` 免费查询报价并保存到 `provider-prices.json`；普通查看和自动排序使用本地快照或最近刷新的报价。未覆盖或刷新失败不会被算成零元。Monid 每次收费提交前重新检查报价和预算；报价变化可能导致停止，用户可刷新后重新查看顺序。TikHub 原生 API 同样在执行前查询单价；其标准采集路径沿用受控价格快照。
+`providers priority show PLATFORM CAPABILITY --refresh` 免费查询报价并保存到 `provider-quotes.json`。执行中的自动排序和每次收费提交共用有时效的报价，默认 24 小时，过期或缺失时自动刷新；同一任务的阶段和并行条目复用刷新结果。刷新失败使旧值失效，该候选不自动派发。普通查看与 dry-run 可使用本地快照或旧版 `provider-prices.json` 估价，但后者不能授权实际收费。TikHub 标准采集和原生 API、Monid、treg 均使用这套缓存，详见 [报价缓存](treg.md#报价缓存)。
 
 ```bash
 soota providers priority show xiaohongshu api \

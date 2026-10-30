@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 
 from soota.catalog import catalog, estimate_catalog, resume_catalog
-from soota.errors import InputError, SourceError
+from soota.errors import AuthBudgetError, InputError, SourceError
 from soota.models import CatalogJob
 from soota.providers.tikhub.catalog import BILIBILI_USER_VIDEOS, YOUTUBE_CHANNEL_ID, YOUTUBE_CHANNEL_VIDEOS
 from soota.storage.jobs import JobStore
+
+pytestmark = pytest.mark.usefixtures("cached_tikhub_prices")
 
 CHANNEL_ID = "UCAAAAAAAAAAAAAAAAAAAAAA"
 CHANNEL = f"https://www.youtube.com/channel/{CHANNEL_ID}"
@@ -115,8 +117,12 @@ def test_zero_budget_and_unknown_price_make_no_request(settings, monkeypatch) ->
     zero = catalog(settings, CHANNEL, max_cost=0, requester=fail_request)
     assert zero.exit_code == 4
     assert zero.data["request_count"] == 0
-    monkeypatch.setattr("soota.providers.tikhub.client.load_price_snapshot", lambda: {"endpoints": {}})
-    unknown = catalog(settings, CHANNEL, max_cost=1, requester=fail_request)
+
+    def no_quote(*args, **kwargs):
+        raise AuthBudgetError("price unavailable")
+
+    monkeypatch.setattr("soota.providers.tikhub.client.TikHubProvider.endpoint_price", no_quote)
+    unknown = catalog(settings, CHANNEL, provider="tikhub", max_cost=1, requester=fail_request)
     assert unknown.exit_code == 4
     assert unknown.data["request_count"] == 0
 

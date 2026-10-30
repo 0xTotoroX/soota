@@ -33,9 +33,11 @@ from soota.providers.opencli_mcp import OpenCLIMCPProvider
 from soota.providers.opencli_mcp import capabilities_for as mcp_capabilities
 from soota.providers.opencli_runtime import OpenCLIRuntime, RuntimeUnavailable
 from soota.providers.priority import ordered_names, quote_rows
+from soota.providers.quotes import online_prices
 from soota.providers.router import RequestBudget, inspect_item, remaining_budget, validate_policy
 from soota.providers.tikhub.capability import capabilities_for
 from soota.providers.tikhub.client import TikHubProvider
+from soota.providers.treg.provider import TregProvider
 from soota.providers.ytdlp import YtDlpProvider
 from soota.providers.ytdlp import capabilities_for as ytdlp_capabilities
 from soota.render.bundle import write_bundle
@@ -157,6 +159,7 @@ def doctor(settings: SootaSettings) -> CommandResult:
     )
 
 
+@online_prices
 def inspect(
     settings: SootaSettings,
     url: str,
@@ -227,15 +230,18 @@ def estimate(
         if getattr(cap, ability)
     ]
     if capabilities_for(source).inspect:
-        available += ["tikhub", "monid"]
+        available += ["tikhub", "monid", "treg"]
     rank = ordered_names(settings, source, ability, available) if provider == "auto" else [provider]
     if not rank:
         raise SourceError("没有可用来源。")
-    if rank[0] == "monid":
-        row = quote_rows(settings, source, ability, ["monid"])[0]
+    if rank[0] in {"monid", "treg"}:
+        row = quote_rows(settings, source, ability, [rank[0]])[0]
         audio_quote = (
             conditional_audio_estimate(source, settings, audio_name)
-            if (transcript in {TranscriptMode.AUTO, TranscriptMode.ASR} and audio_name in {"tikhub", "monid", "auto"})
+            if (
+                transcript in {TranscriptMode.AUTO, TranscriptMode.ASR}
+                and audio_name in {"tikhub", "monid", "treg", "auto"}
+            )
             else None
         )
         if audio_quote:
@@ -250,7 +256,7 @@ def estimate(
             status="success",
             code="ok",
             exit_code=0,
-            message="Monid 报价预估；执行前重新核实报价，无字幕结果也可能收费。",
+            message="报价预估；执行前检查报价时效，空结果也可能收费。",
             data={
                 **row,
                 "source": source.model_dump(),
@@ -274,7 +280,8 @@ def estimate(
         free_name = "opencli-mcp" if mcp else "opencli" if opencli else "yt-dlp"
         conditional_audio = (
             conditional_audio_estimate(source, settings, audio_name)
-            if transcript in {TranscriptMode.AUTO, TranscriptMode.ASR} and audio_name in {"tikhub", "monid", "auto"}
+            if transcript in {TranscriptMode.AUTO, TranscriptMode.ASR}
+            and audio_name in {"tikhub", "monid", "treg", "auto"}
             else None
         )
         return CommandResult(
@@ -342,7 +349,7 @@ def estimate(
     cost, basis = client.estimate_cost(endpoints)
     other_audio = (
         conditional_audio_estimate(source, settings, audio_name)
-        if (transcript in {TranscriptMode.AUTO, TranscriptMode.ASR} and audio_name in {"monid", "auto"})
+        if (transcript in {TranscriptMode.AUTO, TranscriptMode.ASR} and audio_name in {"monid", "treg", "auto"})
         else None
     )
     if other_audio:
@@ -387,6 +394,7 @@ def estimate(
     )
 
 
+@online_prices
 def ingest(
     settings: SootaSettings,
     url: str,
@@ -411,7 +419,7 @@ def ingest(
     provider = selected_provider(settings, provider)
     audio_name = selected_audio_provider(settings, audio_provider)
     validate_policy(provider, fallback, max_cost)
-    if provider in {"tikhub", "monid"} or transcript == TranscriptMode.ASR:
+    if provider in {"tikhub", "monid", "treg"} or transcript == TranscriptMode.ASR:
         if prefer_youtube or exclude_promotions or exclude_ranges:
             raise InputError("跨平台字幕选择和推广过滤当前用于 auto/opencli 字幕路径；请先以 captions-only 获取。")
         # An explicit provider/ASR choice takes priority over a saved free-caption preference.
@@ -639,8 +647,18 @@ def ingest_free(
             and ytdlp_capabilities(source).captions
         ):
             candidates.append(("yt-dlp", YtDlpProvider))
-        if provider in {"auto", "monid"} and capabilities_for(source).captions:
-            if provider_enabled(settings, "monid") and (max_cost != 0 or provider == "monid"):
+        if provider in {"auto", "monid", "treg"} and capabilities_for(source).captions:
+            if (
+                provider_enabled(settings, "treg")
+                and provider in {"auto", "treg"}
+                and (max_cost != 0 or provider == "treg")
+            ):
+                candidates.append(("treg", lambda st: TregProvider(st, remaining_budget(max_cost, records))))
+            if (
+                provider in {"auto", "monid"}
+                and provider_enabled(settings, "monid")
+                and (max_cost != 0 or provider == "monid")
+            ):
                 candidates.append(("monid", lambda st: MonidProvider(st, remaining_budget(max_cost, records))))
             if provider == "auto" and fallback == "tikhub" and max_cost != 0:
                 candidates.append(
@@ -660,7 +678,7 @@ def ingest_free(
         for name, factory in candidates:
             if (
                 provider == "auto"
-                and name in {"tikhub", "monid"}
+                and name in {"tikhub", "monid", "treg"}
                 and not ordered_names(
                     settings, source, "captions", [name], max_cost=remaining_budget(max_cost, records)
                 )
@@ -678,7 +696,9 @@ def ingest_free(
                 captions = None
                 if prefer_youtube and name == "opencli" and source.platform == "bilibili":
                     assert isinstance(client, OpenCLIProvider)
-                    counterpart_fallback = YtDlpProvider(settings) if provider == "auto" else None
+                    counterpart_fallback = (
+                        YtDlpProvider(settings) if provider == "auto" and provider_enabled(settings, "yt-dlp") else None
+                    )
                     candidate_item, captions, notes = youtube_counterpart(client, candidate_item, counterpart_fallback)
                     item = candidate_item
                     warnings.extend(notes)
@@ -754,6 +774,7 @@ def ingest_free(
             fallback == "tikhub"
             and "tikhub" not in attempted
             and "monid" not in attempted
+            and "treg" not in attempted
             and document.status != TranscriptStatus.PENDING
         ):
             if prefer_youtube or exclude_promotions or exclude_ranges:

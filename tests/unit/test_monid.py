@@ -188,6 +188,8 @@ def test_price_order_platform_rules_and_unknown_coverage(settings):
 def test_manual_order_used_by_pipeline_and_absence_stops_paid_fallback(settings, monkeypatch):
     settings.monid.enabled = True
     settings.routing.priorities["youtube"] = {"captions": PriorityRule(mode="manual", order=["monid"])}
+    client = install(settings, monkeypatch, lambda request: httpx.Response(200, json=quote()))
+    client.inspect("apify", APIFY_CAPTIONS)
     calls = []
 
     class MissingProvider:
@@ -276,6 +278,7 @@ def test_native_relay_preserves_post_body_and_uses_manual_priority(settings, mon
 
     client = install(settings, monkeypatch, handler, 0.001)
     monkeypatch.setattr("soota.providers.monid.provider.MonidClient", lambda *args, **kwargs: client)
+    client.inspect("tikhub", endpoint.path)
     body = tmp_path / "body.json"
     body.write_text(json.dumps({"url": "https://mp.weixin.qq.com/s/example", "raw": False}))
     result = call_endpoint(settings, endpoint.key, body_file=body, provider_name="auto", max_cost=0.001)

@@ -12,6 +12,8 @@ FORMATS = frozenset(
     {
         "json3",
         "youtube-transcript",
+        "crawl4ai-youtube",
+        "scrapecreators-youtube",
         "bilibili-json",
         "opencli-youtube",
         "opencli-bilibili",
@@ -42,6 +44,8 @@ def read_cues(format: str, body: Any) -> list[Cue]:
     readers = {
         "json3": structured.json3,
         "youtube-transcript": structured.youtube_transcript,
+        "crawl4ai-youtube": structured.crawl4ai_youtube,
+        "scrapecreators-youtube": structured.scrapecreators_youtube,
         "bilibili-json": structured.bilibili,
         "whisper-json": structured.whisper,
         "soota-segments": structured.saved_segments,

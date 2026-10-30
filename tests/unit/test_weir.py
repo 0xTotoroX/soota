@@ -100,6 +100,71 @@ def test_free_only_refuses_before_data(settings, weir, usage):
     assert calls == ["/v1/usage"]
 
 
+def test_confirmed_gift_coexists_without_changing_credit_limit(settings, weir):
+    from soota.providers.weir_keys import confirm_gift
+
+    calls = weir(usage=balance(balance=6000, available=6000))
+    confirmation = confirm_gift(settings, "environment", 1000)
+    assert confirmation["confirmed_gift_credits"] == 1000
+    assert capture(settings, URL).body.startswith("First.")
+    assert calls == ["/v1/usage", "/v1/x/posts/123"]
+    with ledger(settings).locked() as budget:
+        assert budget.summary()["counted_credits"] == 2
+
+
+@pytest.mark.parametrize("usage", [
+    balance(balance=6001, available=6001),
+    balance(balance=6000, available=6000, tier="t1"),
+    balance(balance=1001, available=1001,
+            freeGrant=dict(granted=5000, remaining=1, resetsAt=RESET)),
+    balance(balance=6000, available=1000, reserved=5000),
+])
+def test_gift_confirmation_does_not_authorize_other_balance_or_exhausted_month(settings, weir, usage):
+    from soota.providers.weir_keys import confirm_gift
+
+    calls = weir(usage=usage)
+    confirm_gift(settings, "environment", 1000)
+    with pytest.raises((AuthBudgetError, ContractError)):
+        capture(settings, URL)
+    assert calls == ["/v1/usage"]
+
+
+def test_gift_is_bound_to_current_key_and_can_be_revoked(settings, weir, monkeypatch):
+    from soota.providers.weir_keys import confirm_gift
+
+    calls = weir(usage=balance(balance=6000, available=6000))
+    confirm_gift(settings, "environment", 1000)
+    path = settings.config_dir / "credentials" / "weir-gifts.json"
+    assert "synthetic-test-key" not in path.read_text()
+    assert path.stat().st_mode & 0o777 == 0o600
+    monkeypatch.setenv("WEIR_API_KEY", "new-synthetic-key")
+    assert confirm_gift(settings, "environment")["confirmed_gift_credits"] == 0
+    with pytest.raises(AuthBudgetError):
+        capture(settings, URL)
+    monkeypatch.setenv("WEIR_API_KEY", "synthetic-test-key")
+    assert confirm_gift(settings, "environment", 0)["confirmed_gift_credits"] == 0
+    with pytest.raises(AuthBudgetError):
+        capture(settings, URL)
+    assert all(call == "/v1/usage" for call in calls)
+
+
+def test_gift_cli_does_not_reveal_key_and_bad_record_is_not_reset(settings, weir, monkeypatch):
+    import soota.providers_cli as cli
+
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    weir(usage=balance(balance=6000, available=6000))
+    output = CliRunner().invoke(app, ["providers", "gift", "weir", "--key-name", "environment",
+                                    "--credits", "1000", "--json"])
+    assert output.exit_code == 0, output.output
+    assert "synthetic-test-key" not in output.output
+    assert json.loads(output.output)["data"]["confirmed_gift_credits"] == 1000
+    path = settings.config_dir / "credentials" / "weir-gifts.json"
+    path.write_text('{"schema_version":1,"credits_by_key_sha256":{"bad":true}}')
+    with pytest.raises(StorageError, match="赠送额度"):
+        capture(settings, URL)
+    assert '"bad":true' in path.read_text()
+
+
 def test_global_monthly_cap_is_shared_between_tasks_and_keys(settings, weir, monkeypatch):
     calls = weir()
     settings.weir.monthly_credits = 2

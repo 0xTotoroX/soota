@@ -137,6 +137,7 @@ def test_caption_restrictions_and_contract_errors_never_trigger_paid_fallback(se
         ingest(settings, BILI, fallback="tikhub", max_cost=0.1)
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_explicit_tikhub_skips_opencli(settings, monkeypatch):
     from tests.unit.test_resolver import _youtube_requester
 
@@ -152,6 +153,7 @@ def test_explicit_tikhub_skips_opencli(settings, monkeypatch):
     assert result.ok and result.data["transcript_source"] != TranscriptSource.UNKNOWN
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_authorized_caption_fallback_runs_only_after_opencli_unknown(settings, monkeypatch):
     from tests.unit.test_resolver import _youtube_requester
 

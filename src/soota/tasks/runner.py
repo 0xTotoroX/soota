@@ -1,8 +1,8 @@
 """Execute and resume unified artifact tasks.
 
-[INPUT]: TaskSpec/Weir credit caps, enumeration, scheduler, native identity checks and artifact services.
+[INPUT]: TaskSpec/routing/Weir caps, shared goal dependencies, scheduler and artifact services.
 [OUTPUT]: Source artifacts/checkpoints and one ordered CommandResult; old workflow requests are forwarded.
-[POS]: tasks orchestration; owns budget scope, job lock and interruption recovery.
+[POS]: tasks orchestration; applies selected routing, budget/quote scopes, job lock and recovery.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
 
@@ -15,7 +15,6 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -29,10 +28,10 @@ from soota.artifacts.bundle import (
 )
 from soota.artifacts.models import BundleV2
 from soota.config import SootaSettings
-from soota.content.native import MEDIA_SUFFIXES
 from soota.errors import AuthBudgetError, InputError, SootaError, SourceError, StorageError
 from soota.media import MediaAsset, MediaService
 from soota.models import CommandResult, MediaItem, ProcessingManifest, TranscriptMode, TranscriptSource
+from soota.providers.quotes import online_prices
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
 from soota.storage.jobs import JobStore
@@ -209,8 +208,9 @@ def _run_item(settings: SootaSettings, spec: TaskSpec, job: TaskJob, row: TaskIt
 def _run_item_locked(
     settings: SootaSettings, spec: TaskSpec, job: TaskJob, row: TaskItem, seed: InputSpec, folder: Path
 ) -> None:
-    from soota.content.native_bindings import media_binding, validate_target_result
+    from soota.content.native_bindings import validate_target_result
     from soota.content.native_types import NativeOperation
+    from soota.tasks.dependencies import acquisition_goals
 
     row.bundle, row.errors = str(folder), []
     work = task_folder(settings, job.id) / row.item_id
@@ -262,31 +262,9 @@ def _run_item_locked(
             for artifact in _valid(folder, bundle, kind):
                 if artifact.attributes.get("verification"):
                     assets.append(MediaAsset.model_validate({**artifact.attributes, "path": folder / artifact.path}))
-    native_images = (
-        seed.kind == "operation"
-        and operation is not None
-        and any(p.suffix.lower() in MEDIA_SUFFIXES for p in operation.files)
-    )
-    if seed.kind == "file" and Path(seed.value).suffix.lower() in {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".webp",
-        ".bmp",
-        ".avif",
-    }:
-        native_images = True
-    if seed.kind == "url":
-        try:
-            media_binding(seed.value)
-            native_images = True
-        except InputError:
-            native_images = Path(urlsplit(seed.value).path).suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-    media_goals = spec.wants & {"video", "audio"}
-    if "images" in spec.wants and native_images:
-        media_goals.add("images")
-    if media_goals and not all(_satisfied(folder, bundle, goal, spec, row) for goal in media_goals):
+    media_goals, text_goals = acquisition_goals(spec, seed, operation.files if operation else None)
+    previous_media = {goal for goal in media_goals if _satisfied(folder, bundle, goal, spec, row)}
+    if media_goals - previous_media:
 
         def fetch_media() -> None:
             nonlocal assets
@@ -321,9 +299,6 @@ def _run_item_locked(
                 raise SourceError("部分媒体未通过验证，已保留其余产物。", details={"media_errors": errors})
 
         _step(settings, job, row, "media", fetch_media)
-    text_goals = spec.wants & {"context", "markdown", "transcript"}
-    if "images" in spec.wants and not native_images:
-        text_goals.add("images")
     bundle = load_bundle(folder)
     if text_goals and (
         not _source_current(folder, bundle, spec, row)
@@ -471,7 +446,7 @@ def _run_item_locked(
             if bundle.content is not None and re.search(r"!\[", bundle.content.body_md):
                 _images(settings, spec, seed, work, folder, bundle, row)
                 return
-            if native_images or seed.kind == "bundle" and _valid(folder, bundle, "image"):
+            if "images" in media_goals or seed.kind == "bundle" and _valid(folder, bundle, "image"):
                 if row.steps.get("media", StepState()).status in {"failed", "blocked"}:
                     raise SourceError("原生图集尚未完整取得。")
                 if not _valid(folder, bundle, "image"):
@@ -486,7 +461,7 @@ def _run_item_locked(
     bundle = load_bundle(folder)
     missing = [goal for goal in spec.required if not _satisfied(folder, bundle, goal, spec, row)]
     if row.steps.get("media", StepState()).status in {"failed", "blocked"}:
-        missing = sorted(set(missing) | (media_goals & spec.required))
+        missing = sorted(set(missing) | ((media_goals & spec.required) - previous_media))
     row.data.update(
         {
             "missing_outputs": sorted(missing),
@@ -532,6 +507,7 @@ def _execute_item(settings: SootaSettings, spec: TaskSpec, job: TaskJob, row: Ta
         save_job(settings, job, item=row)
 
 
+@online_prices
 def execute(
     settings: SootaSettings,
     spec: TaskSpec,
@@ -554,6 +530,11 @@ def execute(
             message="已生成离线任务计划，未创建任务或联网。",
             data={"plan": redact_any(spec.model_dump(mode="json")), "network_discovery": "not_run"},
         )
+    from soota.tasks.policy import task_context, task_settings
+
+    settings = task_settings(settings, spec)
+    if spec.routing is not None:
+        spec = spec.model_copy(update={"execution_context": task_context(settings, spec)})
     if not spec.execution_context:
         from soota.tasks.entry import execution_context
 
@@ -562,25 +543,35 @@ def execute(
                 "execution_context": execution_context(settings, spec.provider, spec.inputs, scope=spec.execution_scope)
             }
         )
-    if spec.weir_max_credits is not None:
-        settings = settings.model_copy(deep=True)
-        settings.weir.task_credits = spec.weir_max_credits
     job = job or create_job(settings, spec)
     budget = TaskBudget(task_folder(settings, job.id), spec.max_cost)
     guard = nullcontext() if _locked else JobStore(settings.jobs_dir).lock(job.id)
     with guard, task_budget_scope(budget):
+        if spec.routing is not None:
+            save_spec(settings, job.id, spec)
         try:
             job.status = "running"
             save_job(settings, job)
             if not job.expanded:
                 set_inputs(settings, job, expand_inputs(settings, spec, job))
             inputs = resolved_inputs(settings, job)
-            run_items(
-                job.items[: spec.max_items],
-                workers=spec.workers,
-                folder=lambda row: _folder(spec, inputs[row.input_index]),
-                action=lambda row: _execute_item(settings, spec, job, row, inputs[row.input_index]),
-            )
+            from soota.tasks.dependencies import task_stages
+
+            for index, stage in enumerate(task_stages(spec)):
+                # 整批必需目标完成后才派发可选获取；失败条目不在同次运行中自动重试。
+                if index and any(row.status != "completed" for row in job.items[: spec.max_items]):
+                    job.warnings.append("必需产物尚未全部完成，已保留剩余额度并跳过可选获取。")
+                    break
+
+                def acquire_stage(row: TaskItem, stage: TaskSpec = stage) -> None:
+                    _execute_item(settings, stage, job, row, inputs[row.input_index])
+
+                run_items(
+                    job.items[: spec.max_items],
+                    workers=spec.workers,
+                    folder=lambda row: _folder(spec, inputs[row.input_index]),
+                    action=acquire_stage,
+                )
         except KeyboardInterrupt:
             # The scheduler has drained workers before this checkpoint/lock exit.
             for row in job.items:

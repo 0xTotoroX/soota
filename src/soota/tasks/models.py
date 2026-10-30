@@ -1,7 +1,7 @@
 """Unified task contracts.
 
 [INPUT]: Validated inputs/targets, acquisition settings and execution limits.
-[OUTPUT]: TaskSpec (persistent workers/scope), TaskItem and TaskJob checkpoints.
+[OUTPUT]: TaskSpec (persistent workers/scope/routing), TaskRouting、TaskItem and TaskJob checkpoints.
 [POS]: tasks data contracts; TaskJob owns private checkpoint/export locks.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, PrivateAttr, model_validator
 
+from soota.config import PriorityRule
 from soota.models import TranscriptMode
 
 # Old semantic/output fields are retained only for persisted request compatibility.
@@ -51,6 +52,17 @@ class OutputSpec(BaseModel):
     required: bool = True
 
 
+class TaskRouting(BaseModel):
+    """选定方案的偏好快照；当前停用设置仍然优先。"""
+
+    model_config = ConfigDict(extra="forbid")
+    allowed_providers: list[
+        Literal["opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg", "weir", "downie", "http", "local"]
+    ]
+    priorities: dict[str, dict[str, PriorityRule]] = Field(default_factory=dict)
+    treg_youtube_captions: Literal["crawl4ai", "scrapecreators"] = "crawl4ai"
+
+
 class TaskSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     inputs: list[InputSpec] = Field(min_length=1)
@@ -78,6 +90,7 @@ class TaskSpec(BaseModel):
     prefer_youtube: bool | None = None
     exclude_promotions: bool | None = None
     exclude_ranges: list[str] = Field(default_factory=list)
+    routing: TaskRouting | None = None
     destination: Path | None = None
     vault: Path | None = None
     subdir: str = "Soota"
@@ -114,6 +127,7 @@ class TaskSpec(BaseModel):
             "yt-dlp",
             "tikhub",
             "monid",
+            "treg",
             "weir",
             "local",
             "http",

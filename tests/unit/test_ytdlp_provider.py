@@ -182,6 +182,7 @@ def test_feature_output_is_written(settings, monkeypatch, tmp_path):
     assert [r["id"] for r in plans] == ["bilibili.video.detail", "youtube.video.detail"]
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_paid_confirmation_still_required_after_both_free_unavailable(settings, monkeypatch):
     from soota.billing import PaymentRequired
     from soota.config import PaymentConfig

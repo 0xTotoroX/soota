@@ -1,6 +1,6 @@
 """
-[INPUT]: Enabled capabilities, price snapshots and saved rules
-[OUTPUT]: quote_rows and ordered_names
+[INPUT]: Enabled capabilities, shared TTL quotes, offline snapshots and saved rules
+[OUTPUT]: quote_rows、rank_quotes 和 ordered_names，规划/执行共用排序
 [POS]: Shared platform and capability routing
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,8 @@ from soota.billing import PaymentGate, provider_enabled
 from soota.config import PriorityRule, SootaSettings
 from soota.errors import InputError, SootaError
 from soota.models import SourceRef
-from soota.providers.monid.client import APIFY_CAPTIONS, MonidClient, quote_cost
+from soota.providers.monid.client import APIFY_CAPTIONS, MonidClient, load_key, quote_cost
+from soota.providers.quotes import is_online, namespace, peek_quote, tikhub_requester
 from soota.providers.tikhub.catalog import catalog_endpoint
 from soota.providers.tikhub.client import (
     BILI_ONE_V3,
@@ -28,8 +28,14 @@ from soota.providers.tikhub.client import (
     YOUTUBE_STREAMS,
     load_price_snapshot,
 )
+from soota.providers.treg.catalog import ENDPOINTS as TREG_ENDPOINTS
+from soota.providers.treg.catalog import caption_endpoint
+from soota.providers.treg.catalog import resolve as treg_endpoint
+from soota.providers.treg.client import TregClient
+from soota.providers.treg.client import load_key as treg_key
+from soota.secrets import load_tikhub_api_key
 
-NAMES = ("opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid")
+NAMES = ("opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg")
 CAPABILITIES = ("inspect", "captions", "catalog", "api", "audio")
 
 
@@ -79,9 +85,18 @@ def quote_rows(
     rows: list[dict[str, Any]] = []
     for name in names:
         enabled = provider_enabled(settings, name)
-        paths = endpoint_chain(source, capability, name, endpoint) if name in {"tikhub", "monid"} else []
+        paths = endpoint_chain(source, capability, name, endpoint) if name in {"tikhub", "monid", "treg"} else []
+        if name == "treg":
+            try:
+                paths = (
+                    [caption_endpoint(settings)]
+                    if source.platform == "youtube" and capability == "captions" and endpoint is None
+                    else [treg_endpoint(path) for path in paths]
+                )
+            except InputError:
+                paths = []
         supported = bool(paths)
-        if name not in {"tikhub", "monid"}:
+        if name not in {"tikhub", "monid", "treg"}:
             from soota.providers.opencli import capabilities_for as opencli_caps
             from soota.providers.opencli_mcp import capabilities_for as mcp_caps
             from soota.providers.ytdlp import capabilities_for as ytdlp_caps
@@ -90,6 +105,7 @@ def quote_rows(
             supported = (name == "yt-dlp") if capability == "audio" else bool(getattr(caps, capability, False))
         values: list[float] = []
         reason = None
+        cached_prices = bool(paths)
         for path in paths:
             upstream = "apify" if path == APIFY_CAPTIONS else "tikhub"
             prices = (
@@ -97,27 +113,55 @@ def quote_rows(
             )
             # The public Monid catalog is also a corroborated base-price snapshot of these TikHub endpoints.
             value = prices.get(path, bundled["tikhub"].get(path) if name == "tikhub" else None)
+            if name == "treg":
+                value = TREG_ENDPOINTS[path][2]
             value = local.get(name, {}).get(path, value)
-            if refresh and enabled:
+            if name == "treg":
+                scope = namespace(settings.treg.base_url, treg_key(settings))
+            elif name == "monid":
+                scope = namespace(settings.monid.base_url, load_key(settings))
+            else:
+                scope = namespace(settings.tikhub.base_url, load_tikhub_api_key() or "")
+            cached = peek_quote(settings, name, scope, path)
+            if cached is not None:
+                value = cached["estimated_cost_usd"]
+            else:
+                cached_prices = False
+            if (refresh or is_online()) and enabled and (cached is None or refresh):
                 try:
-                    if name == "monid":
-                        value = quote_cost(MonidClient(settings, 0).inspect(upstream, path))
+                    if name == "treg":
+                        treg = TregClient(settings, 0)
+                        try:
+                            value = treg.quote(path, refresh=refresh)["estimated_cost_usd"]
+                        finally:
+                            treg.http.close()
+                    elif name == "monid":
+                        monid = MonidClient(settings, 0)
+                        try:
+                            value = quote_cost(monid.inspect(upstream, path, refresh=refresh))
+                        finally:
+                            monid.http.close()
                     else:
                         from soota.providers.tikhub.client import TikHubProvider
                         from soota.providers.tikhub.registry import load_registry
                         from soota.storage.cache import CacheStore
 
-                        value = TikHubProvider(
+                        tikhub = TikHubProvider(
                             cache=CacheStore(settings.cache_dir),
                             runtime_python=settings.tikhub.runtime_python,
                             base_url=settings.tikhub.base_url,
                             payment_gate=PaymentGate(settings, 0),
-                        ).endpoint_price(load_registry().resolve(path))
-                    local.setdefault(name, {})[path] = value
+                            requester=tikhub_requester(),
+                        )
+                        try:
+                            value = tikhub.endpoint_price(load_registry().resolve(path), refresh=refresh)
+                        finally:
+                            close = getattr(tikhub._client, "close", None)
+                            if close is not None:
+                                close()
                 except SootaError as exc:
                     value = None
                     reason = exc.message
-                    local.setdefault(name, {})[path] = None
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 supported = False
                 reason = reason or "缺少已核实的接口覆盖或报价。"
@@ -134,19 +178,14 @@ def quote_rows(
                 "price_basis": (
                     "free-local"
                     if not paths
-                    else "live"
-                    if refresh and enabled
+                    else "ttl-quote"
+                    if ((refresh or is_online()) and enabled) or cached_prices
                     else "saved-quote"
                     if any(path in local.get(name, {}) for path in paths)
-                    else "advertised-snapshot:" + bundled["as_of"]
+                    else "advertised-snapshot:" + ("2026-10-28" if name == "treg" else bundled["as_of"])
                 ),
             }
         )
-    if refresh:
-        from soota.storage.atomic import atomic_write
-
-        local["as_of"] = datetime.now(UTC).isoformat()
-        atomic_write(local_path, json.dumps(local, indent=2))
     return rows
 
 
@@ -159,10 +198,29 @@ def ordered_names(
     endpoint: str | None = None,
     max_cost: float | None = None,
 ) -> list[str]:
-    rule = rule_for(settings, source.platform, capability)
+    if max_cost == 0:
+        names = [name for name in names if name not in {"tikhub", "monid", "treg"}]
     rows = quote_rows(settings, source, capability, names, endpoint=endpoint)
+    return rank_quotes(settings, source, capability, rows, max_cost=max_cost)
+
+
+def rank_quotes(
+    settings: SootaSettings,
+    source: SourceRef,
+    capability: str,
+    rows: list[dict[str, Any]],
+    *,
+    max_cost: float | None = None,
+) -> list[str]:
+    """对已经取得的报价使用同一排序规则，供规划预览复用。"""
+    rule = rule_for(settings, source.platform, capability)
     rows = [
-        r for r in rows if r["enabled"] and r["supported"] and (max_cost is None or r["estimated_cost_usd"] <= max_cost)
+        r
+        for r in rows
+        if r["enabled"]
+        and r["supported"]
+        and (max_cost is None or r["estimated_cost_usd"] <= max_cost)
+        and not (max_cost == 0 and r["provider"] in {"tikhub", "monid", "treg"})
     ]
     order = list(rule.order) + [n for n in NAMES if n not in rule.order]
     rows.sort(key=lambda r: ((r["estimated_cost_usd"] if rule.mode == "cost" else 0), order.index(r["provider"])))

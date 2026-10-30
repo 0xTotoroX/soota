@@ -162,6 +162,15 @@ def test_managed_sdk_obeys_payment_gate_before_dispatch(settings, monkeypatch):
         runtime_python="python",
         payment_gate=PaymentGate(settings),
     )
+    from soota.providers.quotes import cached_quote, namespace
+
+    cached_quote(
+        settings,
+        "tikhub",
+        namespace(settings.tikhub.base_url, "synthetic-key"),
+        "/api/v1/bilibili/web/fetch_one_video_v3",
+        lambda: {"estimated_cost_usd": 0.001},
+    )
     with pytest.raises(PaymentRequired):
         provider._call("/api/v1/bilibili/web/fetch_one_video_v3", {}, billed=True)
     assert provider.records == []

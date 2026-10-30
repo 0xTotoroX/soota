@@ -6,12 +6,15 @@ from soota.models import TranscriptMode, TranscriptSegment, TranscriptSource
 from soota.pipeline import ingest
 from tests.conftest import load_fixture
 
+pytestmark = pytest.mark.usefixtures("cached_tikhub_prices")
+
 
 @pytest.fixture(autouse=True)
 def fake_audio_decode_for_routing_contracts(monkeypatch):
     # These tests use synthetic byte placeholders and fake ASR. Actual decoding
     # and final media acceptance are covered by test_media_* and content tasks.
     monkeypatch.setattr("soota.transcripts.resolver.ensure_audio", lambda path, **kwargs: path)
+    monkeypatch.setattr("soota.transcripts.quality.audio_duration_ms", lambda path: 1000)
 
 
 class FakeAsr:

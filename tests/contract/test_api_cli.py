@@ -219,7 +219,8 @@ def test_http_failure_keeps_reservation_and_never_retries(settings, sdk_transpor
 
 
 @pytest.mark.parametrize("url", [BILI_URL, "https://www.bilibili.com/video/av123456", "https://b23.tv/fixture"])
-def test_normalized_bilibili_inspect_always_uses_v3(sdk_transport, url) -> None:
+def test_normalized_bilibili_inspect_always_uses_v3(sdk_transport, url, cached_tikhub_prices) -> None:
+    cached_tikhub_prices("fixture-key")
     requests = []
 
     def respond(request):

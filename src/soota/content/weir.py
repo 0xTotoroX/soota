@@ -1,6 +1,6 @@
 """Reviewed Weir single-item source-text bindings.
 
-[INPUT]: X status / Reddit post URL and raw Weir response.
+[INPUT]: X status / Reddit post URL, configured key pool and raw Weir response.
 [OUTPUT]: NativeContent preserving source body and target identity.
 [POS]: Deterministic content conversion; HTTP/credits belong to providers.weir.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import time
 from collections.abc import Callable
@@ -21,7 +20,8 @@ from soota.config import SootaSettings
 from soota.content.native_types import NativeContent
 from soota.errors import AuthBudgetError, ContractError, InputError, SourceError
 from soota.models import SourceRef
-from soota.providers.weir import WeirClient, load_key
+from soota.providers.weir import WeirClient
+from soota.providers.weir_keys import load_keys
 from soota.storage.cache import CacheStore
 from soota.storage.task_budget import active_task_identity
 
@@ -129,28 +129,36 @@ def _complete_articles(
 def capture(settings: SootaSettings, url: str, *, allow_credits: bool = True) -> NativeContent:
     selected_provider(settings, "weir")
     platform, identity = target(url)
-    key = load_key(settings)
-    if key is None:
+    credentials = load_keys(settings)
+    if not credentials:
         raise AuthBudgetError("缺少 Weir API Key；设置 WEIR_API_KEY 或使用 soota providers auth weir。")
     source = SourceRef(platform=platform, kind="post", id=identity, url=url, canonical_url=url)
     cache = CacheStore(settings.cache_dir)
-    artifact = "weir-body-" + hashlib.sha256(key.encode()).hexdigest()[:24]
-    saved = cache.get_json(source, artifact)
-    if saved and settings.weir.cache_seconds > 0:
-        stamp, data = saved.get("time"), saved.get("data")
-        if (
-            isinstance(stamp, (int, float))
-            and not isinstance(stamp, bool)
-            and 0 <= time.time() - stamp < settings.weir.cache_seconds
-            and isinstance(data, dict)
-        ):
-            return convert(data, url, platform, identity)
+    for credential in credentials:
+        saved = cache.get_json(source, credential.cache_key)
+        if saved and settings.weir.cache_seconds > 0:
+            stamp, data = saved.get("time"), saved.get("data")
+            if (
+                isinstance(stamp, (int, float))
+                and not isinstance(stamp, bool)
+                and 0 <= time.time() - stamp < settings.weir.cache_seconds
+                and isinstance(data, dict)
+            ):
+                return convert(data, url, platform, identity)
     # A successful carrier read is a task checkpoint even when Article acquisition fails.
     task = active_task_identity()
     checkpoint = CacheStore(Path(task) / "weir") if task else None
-    acquired = checkpoint.get_json(source, artifact) if checkpoint else None
+    acquired = checkpoint.get_json(source, "weir-carrier") if checkpoint else None
     data = acquired.get("data") if acquired else None
-    client = WeirClient(settings)
+    if checkpoint:
+        for credential in credentials:
+            if data is not None:
+                break
+            acquired = checkpoint.get_json(source, credential.cache_key)
+            if acquired and isinstance(acquired.get("data"), dict):
+                data = acquired["data"]
+                break
+    client = WeirClient(settings, credentials=credentials)
     if data is None:
         if not allow_credits:
             raise AuthBudgetError("--max-cost 0 禁止新 credits 计费请求；可用 --weir-max-credits 设置免费额度上限。")
@@ -160,11 +168,11 @@ def capture(settings: SootaSettings, url: str, *, allow_credits: bool = True) ->
 
     def save_checkpoint() -> None:
         if checkpoint:
-            checkpoint.put_json(source, artifact, {"data": data}, redact=False)
+            checkpoint.put_json(source, "weir-carrier", {"data": data}, redact=False)
 
     save_checkpoint()
     if platform == "x":
         _complete_articles(data, client, save_checkpoint, allow_credits=allow_credits)
     result = convert(data, url, platform, identity)
-    cache.put_json(source, artifact, {"time": time.time(), "data": data}, redact=False)
+    cache.put_json(source, client.credential.cache_key, {"time": time.time(), "data": data}, redact=False)
     return result

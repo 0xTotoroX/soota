@@ -556,15 +556,15 @@ def test_task_budget_is_used_by_two_independent_tikhub_clients(settings, tmp_pat
             requester=requester,
             payment_gate=PaymentGate(settings, 1),
         )
-        result.snapshot = {"endpoints": {"/synthetic-read": 0.6}}
+        result.endpoint_price = lambda endpoint: 0.6
         return result
 
     with task_budget_scope(TaskBudget(tmp_path / "budget", 1)):
         with pytest.raises(SourceError):
-            client()._call("/synthetic-read", {}, billed=True)
+            client()._call("/api/v1/bilibili/web/fetch_one_video_v3", {}, billed=True)
     with task_budget_scope(TaskBudget(tmp_path / "budget", 1)):
         with pytest.raises(AuthBudgetError):
-            client()._call("/synthetic-read", {}, billed=True)
+            client()._call("/api/v1/bilibili/web/fetch_one_video_v3", {}, billed=True)
     assert len(requests) == 1
     assert TaskBudget(tmp_path / "budget", 1).snapshot()["reserved_cost_usd"] == "0.6"
 

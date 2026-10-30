@@ -15,9 +15,11 @@ from soota.billing import PaymentGate
 from soota.config import SootaSettings
 from soota.errors import AuthBudgetError, InputError, SootaError, SourceError
 from soota.models import CommandResult, RequestRecord
+from soota.providers.quotes import online_prices
 from soota.providers.tikhub.capability import PLATFORM_CAPABILITIES
 from soota.providers.tikhub.client import TikHubProvider
 from soota.providers.tikhub.registry import PLATFORM_NAMES, TASK_NAMES, ApiEndpoint, load_registry
+from soota.providers.treg.provider import TregProvider
 from soota.secrets import CREDENTIAL_FIELDS, REDACTED, redact_any
 from soota.storage.atomic import atomic_write
 from soota.storage.cache import CacheStore
@@ -211,6 +213,7 @@ def prepare_request(
     return query, body
 
 
+@online_prices
 def call_endpoint(
     settings: SootaSettings,
     selector: str,
@@ -231,18 +234,6 @@ def call_endpoint(
     from soota.providers.priority import ordered_names, quote_rows
 
     endpoint = load_registry().resolve(selector)
-    platform = endpoint.path.split("/")[3]
-    source = SourceRef(platform=platform, kind="video", id="api", url="", canonical_url="")
-    if provider_name == "auto":
-        names = ordered_names(settings, source, "api", ["tikhub", "monid"], endpoint=endpoint.path)
-        if not names and provider_enabled(settings, "tikhub"):
-            names = ["tikhub"]  # Direct API obtains a live quote before dispatch, including uncached paths.
-        if not names:
-            raise SourceError("没有覆盖此接口的已启用来源。")
-        provider_name = names[0]
-    if provider_name not in {"tikhub", "monid"}:
-        raise InputError("api call --provider 支持 auto/tikhub/monid。")
-    selected_provider(settings, provider_name)
     if (not endpoint.callable and not allow_auxiliary) or endpoint.deprecated:
         raise SourceError("该接口不属于当前可用的内容查询接口。", hint="用 api list 查看 callable 字段。")
     query, body = prepare_request(endpoint, params or [], params_file, body_file)
@@ -253,6 +244,18 @@ def call_endpoint(
         output = output.expanduser().resolve()
         if output.exists() and not dry_run:
             raise InputError("输出文件已存在。", hint="请使用新的 --output 路径，避免覆盖已有结果。")
+    platform = endpoint.path.split("/")[3]
+    source = SourceRef(platform=platform, kind="video", id="api", url="", canonical_url="")
+    if provider_name == "auto":
+        names = ordered_names(settings, source, "api", ["tikhub", "monid", "treg"], endpoint=endpoint.path)
+        if not names and provider_enabled(settings, "tikhub"):
+            names = ["tikhub"]  # Direct API obtains a live quote before dispatch, including uncached paths.
+        if not names:
+            raise SourceError("没有覆盖此接口的已启用来源。")
+        provider_name = names[0]
+    if provider_name not in {"tikhub", "monid", "treg"}:
+        raise InputError("api call --provider 支持 auto/tikhub/monid/treg。")
+    selected_provider(settings, provider_name)
     request = {
         "provider": provider_name,
         "key": endpoint.key,
@@ -279,7 +282,10 @@ def call_endpoint(
         if (
             not record.billed
             or record.cache_hit
-            or record.endpoint not in {endpoint.path, "monid:tikhub:" + endpoint.path}
+            or (
+                not record.endpoint.startswith("treg:")
+                and record.endpoint not in {endpoint.path, "monid:tikhub:" + endpoint.path}
+            )
         ):
             return
         price = record.estimated_cost_usd
@@ -292,8 +298,10 @@ def call_endpoint(
         reserved.append(record)
 
     provider = (
-        MonidProvider(settings, max_cost, purpose="api", before_request=reserve)
-        if provider_name == "monid"
+        (TregProvider if provider_name == "treg" else MonidProvider)(
+            settings, max_cost, purpose="api", before_request=reserve
+        )
+        if provider_name in {"monid", "treg"}
         else TikHubProvider(
             runtime_python=settings.tikhub.runtime_python,
             cache=CacheStore(settings.cache_dir),
@@ -309,6 +317,8 @@ def call_endpoint(
         credentials.append(provider.api_key)
     if isinstance(provider, MonidProvider):
         credentials.append(provider.monid.key)
+    if isinstance(provider, TregProvider):
+        credentials.append(provider.treg.key)
     try:
         price = provider.endpoint_price(endpoint)
         response = provider.query(endpoint, query, body, allow_auxiliary=allow_auxiliary)

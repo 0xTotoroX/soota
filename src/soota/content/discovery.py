@@ -1,6 +1,6 @@
 """
 [INPUT]: Local runtimes, reviewed bindings and enabled providers.
-[OUTPUT]: Offline capability inventory, including Weir URL body contracts.
+[OUTPUT]: Offline capability inventory, including controlled treg reads and Weir URL body contracts.
 [POS]: Discovery only; never claims live account or website verification.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -249,6 +249,39 @@ def discover_capabilities(settings: SootaSettings) -> dict[str, Any]:
                     "verification": None,
                 }
             )
+    from soota.providers.treg.catalog import ENDPOINTS
+
+    treg_enabled = provider_enabled(settings, "treg")
+    providers.append(
+        {
+            "provider": "treg",
+            "enabled": treg_enabled,
+            "available": treg_enabled,
+            "state": "discovered" if treg_enabled else "blocked",
+            "credentials_checked": False,
+            "prices_checked": False,
+            "verification": None,
+        }
+    )
+    treg_paths = {row[0] for row in ENDPOINTS.values()}
+    for endpoint in registry.preferred() if treg_enabled else []:
+        if endpoint.path not in treg_paths or not endpoint.callable or endpoint.deprecated:
+            continue
+        capabilities.append(
+            {
+                "id": "treg." + endpoint.key,
+                "provider": "treg",
+                "operation": endpoint.key,
+                "description": endpoint.summary,
+                "state": "native",
+                "access": "read",
+                "input_schema": endpoint.query_schema,
+                "tasks": endpoint.tasks,
+                "output_contract": "provider_native",
+                "requires_payment_policy": True,
+                "verification": None,
+            }
+        )
     weir_enabled = provider_enabled(settings, "weir")
     providers.append(
         {

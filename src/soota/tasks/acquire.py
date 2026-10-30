@@ -1,7 +1,7 @@
 """
 [INPUT]: Task inputs, provider policy and artifact goals.
 [OUTPUT]: Raw source text, transcript or media collection results.
-[POS]: Shared task acquisition; Weir USD-zero policy reaches body capture.
+[POS]: Shared task acquisition; local ASR passes timeline/repetition acceptance guards.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
 
@@ -47,6 +47,7 @@ from soota.providers.priority import ordered_names
 from soota.providers.tikhub.client import TikHubProvider
 from soota.providers.tikhub.normalize import pick_audio_url
 from soota.providers.tikhub.registry import load_registry
+from soota.providers.treg.provider import TregProvider
 from soota.secrets import redact_any
 from soota.storage.cache import CacheStore
 from soota.tasks.inputs import source_for, subtitle_format
@@ -54,6 +55,7 @@ from soota.tasks.models import InputSpec, TaskSpec
 from soota.transcripts.asr import resolve_engine
 from soota.transcripts.captions import parse_transcript_markdown
 from soota.transcripts.conversion import parse_payload
+from soota.transcripts.quality import parse_asr_payload
 
 
 class MediaOptions(TypedDict):
@@ -96,8 +98,8 @@ def public_text(text: str) -> str:
 
 def native_operation(settings: SootaSettings, spec: TaskSpec, seed: InputSpec, work: Path) -> NativeOperation:
     operation = seed.operation or ""
-    if operation.startswith(("tikhub.", "monid.")):
-        if spec.provider not in {"auto", "tikhub", "monid"}:
+    if operation.startswith(("tikhub.", "monid.", "treg.")):
+        if spec.provider not in {"auto", "tikhub", "monid", "treg"}:
             raise InputError("原生接口与显式 Provider 不一致。")
         from soota.api import _validate
 
@@ -106,22 +108,30 @@ def native_operation(settings: SootaSettings, spec: TaskSpec, seed: InputSpec, w
             raise InputError("只允许当前已审查的读取接口。")
         _validate(seed.params, endpoint.query_schema, "查询参数")
         chosen = spec.provider
-        if operation.startswith("monid."):
-            if chosen not in {"auto", "monid"}:
-                raise InputError("Monid 原生操作与显式 Provider 不一致。")
-            chosen = "monid"
+        if operation.startswith(("monid.", "treg.")):
+            requested = operation.split(".", 1)[0]
+            if chosen not in {"auto", requested}:
+                raise InputError("原生操作与显式 Provider 不一致。")
+            chosen = requested
         if chosen == "auto":
             source = SourceRef(platform=endpoint.path.split("/")[3], kind="video", id="api", url="", canonical_url="")
-            choices = ordered_names(settings, source, "api", ["tikhub", "monid"], endpoint=endpoint.path)
-            if not choices and provider_enabled(settings, "tikhub"):
-                choices = ["tikhub"]
+            from soota.storage.task_budget import remaining_active_budget
+
+            choices = ordered_names(
+                settings,
+                source,
+                "api",
+                ["tikhub", "monid", "treg"],
+                endpoint=endpoint.path,
+                max_cost=remaining_active_budget(spec.max_cost),
+            )
             if not choices:
                 raise SourceError("没有可用的原生接口来源。")
             chosen = choices[0]
         selected_provider(settings, chosen)
         client = (
-            MonidProvider(settings, spec.max_cost, purpose="api")
-            if chosen == "monid"
+            (TregProvider if chosen == "treg" else MonidProvider)(settings, spec.max_cost, purpose="api")
+            if chosen in {"monid", "treg"}
             else TikHubProvider(
                 cache=CacheStore(settings.cache_dir),
                 runtime_python=settings.tikhub.runtime_python,
@@ -262,9 +272,7 @@ def _collect_text(
         raw = engine.transcribe(audio.path, language=spec.language)
         if isinstance(raw, list):
             raw = CaptionPayload(format="soota-segments", body=[s.model_dump() for s in raw])
-        segments = parse_payload(raw, language=spec.language, source=TranscriptSource.ASR)
-        if not segments:
-            raise SourceError("本地转写未取得文字。")
+        segments = parse_asr_payload(raw, audio.path, language=spec.language)
         item.provenance = {"provider": "local", "asr_engine": engine.name, "caption_format": raw.format}
         return Collection(
             item,
@@ -477,10 +485,12 @@ def collect_media(
     if spec.provider == "http" or (
         spec.provider == "auto" and _direct_url(seed.value) and provider_enabled(settings, "http")
     ):
+        selected_provider(settings, "http")
         return MediaBatch(
             [service.from_descriptor(MediaDescriptor(url=seed.value, source_provider="http"), kind=kind, **options)]
         )
     if spec.provider == "downie":
+        selected_provider(settings, "downie")
         provider = DownieProvider(settings)
         item = MediaItem(source=source_for(seed))
         if kind == "audio":
@@ -493,7 +503,7 @@ def collect_media(
     media_provider = spec.provider
     if media_provider == "auto" and kind == "audio":
         choices = ordered_names(
-            settings, source_for(seed), "audio", ["yt-dlp", "tikhub", "monid"], max_cost=spec.max_cost
+            settings, source_for(seed), "audio", ["yt-dlp", "tikhub", "monid", "treg"], max_cost=spec.max_cost
         )
         if not choices:
             raise SourceError("没有可用音频来源。")
@@ -518,13 +528,13 @@ def collect_media(
             except RuntimeUnavailable:
                 if spec.provider != "auto":
                     raise
-    if media_provider in {"tikhub", "monid"}:
+    if media_provider in {"tikhub", "monid", "treg"}:
         selected_provider(settings, media_provider)
         if kind != "audio":
             raise SourceError("TikHub 标准视频产物尚无已验证分轨契约；可显式提供原生媒体描述。")
         client = (
-            MonidProvider(settings, spec.max_cost, purpose="audio")
-            if media_provider == "monid"
+            (TregProvider if media_provider == "treg" else MonidProvider)(settings, spec.max_cost, purpose="audio")
+            if media_provider in {"monid", "treg"}
             else TikHubProvider(
                 cache=CacheStore(settings.cache_dir),
                 runtime_python=settings.tikhub.runtime_python,

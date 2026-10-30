@@ -86,6 +86,7 @@ def test_metadata_bundle_does_not_read_tikhub_or_write_missing_transcript_cache(
     assert not list(settings.cache_dir.rglob("transcript.*.json"))
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_authorized_fallback_only_for_unavailable_runtime(settings, monkeypatch):
     def unavailable(*args):
         raise RuntimeUnavailable("Bridge unavailable")

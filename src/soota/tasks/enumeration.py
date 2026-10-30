@@ -1,3 +1,11 @@
+"""任务输入枚举。
+
+[INPUT]: TaskSpec、集合来源、现有目录与原生读取接口。
+[OUTPUT]: 有序展开的 InputSpec 与持久化枚举检查点。
+[POS]: 首个请求前绑定目录子任务；恢复沿用子任务、预算和回执。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +18,7 @@ from soota.billing import selected_provider
 from soota.catalog import catalog, resume_catalog
 from soota.config import SootaSettings
 from soota.errors import ContractError, SourceError
+from soota.models import CatalogJob
 from soota.providers.process import run_process
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
@@ -134,6 +143,17 @@ def expand_inputs(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> list
         elif previous.get("catalog"):
             result = None
         else:
+
+            def bind_catalog(child: CatalogJob, key: str = key) -> None:
+                # 首个请求前记录子任务，进程中断后沿用原游标、预算和计费回执。
+                job.enumeration[key] = {
+                    "job_id": child.id,
+                    "provider": child.provider,
+                    "resumable": child.provider not in {"opencli", "opencli-mcp"},
+                    "stop_reason": "interrupted",
+                }
+                save_job(settings, job)
+
             result = catalog(
                 settings,
                 seed.value,
@@ -142,6 +162,7 @@ def expand_inputs(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> list
                 max_pages=spec.max_pages,
                 max_cost=spec.max_cost,
                 output=folder / "enumeration",
+                _on_created=bind_catalog,
             )
         if result is not None:
             job.enumeration[key] = redact_any(result.data)

@@ -42,7 +42,7 @@ def api_show(
 @app.command("call")
 def api_call(
     endpoint: Annotated[str, typer.Argument(help="接口 key 或路径；旧路径自动选择同功能最新版本")],
-    provider: Annotated[str, typer.Option("--provider", help="auto/tikhub/monid")] = "auto",
+    provider: Annotated[str, typer.Option("--provider", help="auto/tikhub/monid/treg")] = "auto",
     param: Annotated[list[str] | None, typer.Option("--param", "-p", help="name=value，可重复")] = None,
     params_file: Annotated[Path | None, typer.Option("--params-file", help="查询参数 JSON 对象文件")] = None,
     body: Annotated[

@@ -1,6 +1,6 @@
 """
 [INPUT]: User config, provider overrides and environment values.
-[OUTPUT]: Validated settings including optional Weir free-credit caps.
+[OUTPUT]: Validated settings, quote TTL and optional Monid/treg/Weir providers.
 [POS]: Shared configuration models and loading; credentials remain external.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -50,6 +50,13 @@ class MonidConfig(BaseModel):
     max_polls: int = Field(default=30, ge=1)
 
 
+class TregConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = "https://treg.to"
+    timeout_seconds: float = Field(default=90, gt=0)
+    youtube_captions: Literal["crawl4ai", "scrapecreators"] = "crawl4ai"
+
+
 class WeirConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
@@ -63,7 +70,7 @@ class WeirConfig(BaseModel):
 class PriorityRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["cost", "manual"] = "cost"
-    order: list[Literal["opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid"]] = Field(default_factory=list)
+    order: list[Literal["opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"]] = Field(default_factory=list)
 
     @field_validator("order")
     @classmethod
@@ -103,15 +110,16 @@ class LocalProviderConfig(BaseModel):
 
 
 class AudioConfig(BaseModel):
-    provider: Literal["auto", "yt-dlp", "downie", "tikhub", "monid"] = "yt-dlp"
+    provider: Literal["auto", "yt-dlp", "downie", "tikhub", "monid", "treg"] = "yt-dlp"
     timeout_seconds: float = Field(default=900, gt=0)
 
 
 class RoutingConfig(BaseModel):
+    price_ttl_seconds: int = Field(default=86400, gt=0)
     disabled_providers: set[
-        Literal["opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "weir", "downie", "http"]
+        Literal["opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg", "weir", "downie", "http"]
     ] = Field(default_factory=set)
-    default_provider: Literal["auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid"] = "auto"
+    default_provider: Literal["auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"] = "auto"
     priorities: dict[str, dict[str, PriorityRule]] = Field(default_factory=dict)
 
     @field_validator("default_provider", mode="before")
@@ -135,6 +143,7 @@ class SootaSettings(BaseModel):
     data_dir: Path
     tikhub: TikHubConfig = Field(default_factory=TikHubConfig)
     monid: MonidConfig = Field(default_factory=MonidConfig)
+    treg: TregConfig = Field(default_factory=TregConfig)
     weir: WeirConfig = Field(default_factory=WeirConfig)
     opencli: OpenCLIConfig = Field(default_factory=OpenCLIConfig)
     opencli_mcp: OpenCLIMCPConfig = Field(default_factory=OpenCLIMCPConfig)
@@ -221,6 +230,7 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
         routing_data.update(provider_data.get("routing", {}))
         routing_config = RoutingConfig.model_validate(routing_data)
         monid_config = MonidConfig.model_validate({**(data.get("monid") or {}), **provider_data.get("monid", {})})
+        treg_config = TregConfig.model_validate({**(data.get("treg") or {}), **provider_data.get("treg", {})})
         weir_config = WeirConfig.model_validate({**(data.get("weir") or {}), **provider_data.get("weir", {})})
         audio_config = AudioConfig.model_validate(data.get("audio") or {})
         mcp_config = OpenCLIMCPConfig.model_validate(
@@ -246,6 +256,7 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
         updates=updates_config,
         routing=routing_config,
         monid=monid_config,
+        treg=treg_config,
         weir=weir_config,
         audio=audio_config,
         content_selection=selection_config,

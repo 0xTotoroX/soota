@@ -1,6 +1,6 @@
 """
 [INPUT]: Settings, credential file and priority planner
-[OUTPUT]: providers and priority CLI groups
+[OUTPUT]: Provider policy, credentials, redacted inventory and explicit gift confirmation
 [POS]: User configuration entry point
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -19,10 +19,12 @@ from soota.errors import InputError
 from soota.models import CommandResult, SourceRef
 from soota.providers.monid.client import load_key
 from soota.providers.priority import CAPABILITIES, NAMES, ordered_names, quote_rows, rule_for
+from soota.providers.quotes import quote_scope
 from soota.providers.tikhub.registry import PLATFORM_NAMES, load_registry
+from soota.providers.treg.client import load_key as treg_key
 from soota.storage.atomic import atomic_write
 
-app = typer.Typer(help="启用来源、配置 Monid/Weir 凭据，按平台和能力查看或设置优先级。")
+app = typer.Typer(help="启用来源、配置 Monid/treg/Weir 凭据，按平台和能力查看或设置优先级。")
 priority_app = typer.Typer(help="cost 按报价排序；manual 使用指定顺序，未列来源排在后面。")
 app.add_typer(priority_app, name="priority")
 
@@ -39,6 +41,7 @@ def save(settings: SootaSettings) -> None:
                 "routing": settings.routing.model_dump(mode="json"),
                 "monid": settings.monid.model_dump(mode="json"),
                 "weir": settings.weir.model_dump(mode="json"),
+                "treg": settings.treg.model_dump(mode="json"),
             },
             ensure_ascii=False,
             indent=2,
@@ -60,6 +63,8 @@ def toggle(name: str, enabled: bool) -> CommandResult:
         settings.monid.enabled = enabled
     if name == "weir":
         settings.weir.enabled = enabled
+    if name == "treg":
+        settings.treg.enabled = enabled
     save(settings)
     return result("来源策略已保存；付费确认模式未改变。", {"provider": name, "enabled": enabled})
 
@@ -84,6 +89,8 @@ def show(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
                 "routing": settings.routing.model_dump(mode="json"),
                 "monid": settings.monid.model_dump(),
                 "weir": settings.weir.model_dump(),
+                "treg": settings.treg.model_dump(),
+                "treg_key_present": bool(treg_key(settings)),
                 "monid_key_present": bool(load_key(settings)),
             },
         )
@@ -95,11 +102,16 @@ def show(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
 def auth(
     name: str,
     key_file: Annotated[Path | None, typer.Option("--key-file")] = None,
+    key_name: Annotated[
+        str | None, typer.Option("--key-name", help="Weir 备用 Key 名称；不指定时更新主用 Key。")
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     def configure() -> CommandResult:
-        if name not in {"monid", "weir"}:
-            raise InputError("此命令配置 Monid/Weir；TikHub 沿用 TIKHUB_API_KEY 或 Keychain。")
+        if name not in {"monid", "treg", "weir"}:
+            raise InputError("此命令配置 Monid/treg/Weir；TikHub 沿用 TIKHUB_API_KEY 或 Keychain。")
+        if key_name is not None and name != "weir":
+            raise InputError("命名备用 Key 当前仅支持 Weir。")
         key = (
             key_file.expanduser().read_text(encoding="utf-8").strip()
             if key_file
@@ -107,6 +119,13 @@ def auth(
         )
         if not key or any(ch.isspace() for ch in key):
             raise InputError("API Key 不能为空或包含空白。")
+        if key_name is not None:
+            from soota.providers.weir_keys import save_key
+
+            save_key(load_settings(), key_name, key)
+            return result(
+                "Weir 备用 Key 已保存；不显示密钥，共用月度与任务上限。", {"configured": True, "name": key_name}
+            )
         path = load_settings().config_dir / "credentials" / f"{name}.key"
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         atomic_write(path, key + "\n")
@@ -114,6 +133,24 @@ def auth(
         return result(f"{name} Key 已保存到本机配置目录；不会显示密钥。", {"configured": True})
 
     run(json_output, configure)
+
+
+@app.command("keys")
+def keys(
+    name: str,
+    enable_key: Annotated[str | None, typer.Option("--enable")] = None,
+    disable_key: Annotated[str | None, typer.Option("--disable")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    def inspect() -> CommandResult:
+        from soota.providers.weir_keys import inventory
+
+        if name != "weir":
+            raise InputError("备用 Key 管理当前适用于 Weir。")
+        data = inventory(load_settings(), enable=enable_key, disable=disable_key)
+        return result("按配置顺序持久轮询；认证 401 跳到下一个，余额不足、限流、上游错误及未知扣费均停止。", data)
+
+    run(json_output, inspect)
 
 
 def source_for(platform: str, capability: str) -> SourceRef:
@@ -127,6 +164,25 @@ def source_for(platform: str, capability: str) -> SourceRef:
         url="",
         canonical_url="",
     )
+
+
+@app.command("gift")
+def gift(
+    name: str,
+    key_name: Annotated[str, typer.Option("--key-name")],
+    credits: Annotated[int | None, typer.Option("--credits", min=0,
+        help="用户明确确认的赠送额度；0 撤销，不指定时只读。")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    def configure() -> CommandResult:
+        from soota.providers.weir_keys import confirm_gift
+
+        if name != "weir":
+            raise InputError("赠送额度确认当前适用于 Weir。")
+        return result("赠送额度确认不增加月度可用余额、任务上限或付费授权。",
+                      confirm_gift(load_settings(), key_name, credits))
+
+    run(json_output, configure)
 
 
 @priority_app.command("set")
@@ -172,17 +228,19 @@ def show_priority(
             raise InputError("api 报价需提供 --endpoint；不同接口不混合比较。")
         if path and path.split("/")[3] != platform:
             raise InputError("接口不属于所选平台。")
-        names = ["tikhub", "monid"] if capability == "api" else list(NAMES)
+        names = ["tikhub", "monid", "treg"] if capability == "api" else list(NAMES)
         if capability == "audio":
-            names = ["yt-dlp", "tikhub", "monid"]
-        rows = quote_rows(settings, source, capability, names, endpoint=path, refresh=refresh)
+            names = ["yt-dlp", "tikhub", "monid", "treg"]
+        with quote_scope(online=refresh):
+            rows = quote_rows(settings, source, capability, names, endpoint=path, refresh=refresh)
+            order = ordered_names(settings, source, capability, names, endpoint=path)
         return result(
             "来源报价和有效顺序；不包含重试、折扣或转写费用。",
             {
                 "platform": platform,
                 "capability": capability,
                 "rule": rule_for(settings, platform, capability).model_dump(),
-                "order": ordered_names(settings, source, capability, names, endpoint=path),
+                "order": order,
                 "candidates": rows,
             },
         )

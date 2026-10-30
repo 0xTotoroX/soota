@@ -51,6 +51,7 @@ def test_default_bundle_is_context_only_and_keeps_cue_text(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["opencli", "tikhub"])
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_ingest_returns_context_for_both_paths_without_article(settings, monkeypatch, provider):
     from soota.models import CaptionResult, TranscriptMode
     from soota.pipeline import ingest

@@ -98,13 +98,15 @@ def test_balance_is_rechecked_each_request_and_failure_stops(settings, monkeypat
 
     def request(method, path, params):
         calls.append(path)
+        if path == ENDPOINT_INFO:
+            return {"data": {"endpoint_uri": params["endpoint"], "endpoint_cost": 0.001}}
         return next(wallets) if path == INFO else {"data": {}}
 
     client = TikHubProvider(cache=CacheStore(settings.cache_dir), requester=request, payment_gate=PaymentGate(settings))
     client._call(ENDPOINT.path, {}, billed=True)
     with pytest.raises(BalancePaused):
         client._call(ENDPOINT.path, {}, billed=True)
-    assert calls == [INFO, ENDPOINT.path, INFO]
+    assert calls == [ENDPOINT_INFO, INFO, ENDPOINT.path, INFO]
     assert client.max_retries == 0
 
 
@@ -185,6 +187,7 @@ def test_bad_routing_config_returns_structured_cli_error(settings, monkeypatch):
     assert json.loads(result.stdout)["code"] == "input"
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_catalog_asks_each_page_and_resumes_without_double_reservation(settings, monkeypatch):
     settings.payment = PaymentConfig()
     prompts = iter([True, False])

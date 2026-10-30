@@ -1,5 +1,5 @@
 """
-[INPUT]: Monid HTTP contracts, PaymentGate and shared task reservations
+[INPUT]: Monid HTTP contracts, shared TTL quotes, PaymentGate and task reservations
 [OUTPUT]: MonidClient, quote_cost and credential loading
 [POS]: Monid transport and durable run receipts
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -21,6 +21,7 @@ from soota.billing import PaymentGate, selected_provider
 from soota.config import SootaSettings
 from soota.errors import AuthBudgetError, ContractError, SourceError
 from soota.models import RequestRecord
+from soota.providers.quotes import cached_quote, namespace
 from soota.storage.atomic import atomic_write
 from soota.storage.locking import lock_file
 from soota.storage.task_budget import active_task_identity, reserve_active_task
@@ -101,8 +102,19 @@ class MonidClient:
             raise ContractError("Monid 响应必须是对象。")
         return data
 
-    def inspect(self, provider: str, endpoint: str) -> dict[str, Any]:
-        return self.request("POST", "/v1/inspect", {"provider": provider, "endpoint": endpoint})
+    def inspect(self, provider: str, endpoint: str, *, refresh: bool = False) -> dict[str, Any]:
+        def fetch() -> dict[str, Any]:
+            detail = self.request("POST", "/v1/inspect", {"provider": provider, "endpoint": endpoint})
+            return {"estimated_cost_usd": quote_cost(detail), "price": detail["price"]}
+
+        return cached_quote(
+            self.settings,
+            "monid",
+            namespace(self.settings.monid.base_url, self.key),
+            endpoint,
+            fetch,
+            refresh=refresh,
+        )
 
     def wallet(self) -> dict[str, float]:
         data = self.request("GET", "/v1/wallet/balance")

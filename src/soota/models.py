@@ -221,7 +221,7 @@ class CatalogJob(BaseModel):
     status: Literal["running", "paused", "completed", "failed"] = "running"
     source: SourceRef
     # Defaults preserve persisted v1 TikHub jobs and their cursor semantics.
-    provider: Literal["tikhub", "monid", "opencli", "opencli-mcp"] = "tikhub"
+    provider: Literal["tikhub", "monid", "treg", "opencli", "opencli-mcp"] = "tikhub"
     profile: str | None = None
     completeness: Literal["unknown", "paginated"] = "paginated"
     warnings: list[str] = Field(default_factory=list)

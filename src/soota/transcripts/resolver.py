@@ -21,8 +21,8 @@ from soota.providers.ytdlp import YtDlpProvider
 from soota.storage.cache import CacheStore
 from soota.transcripts.acquisition import acquire_captions
 from soota.transcripts.asr import AsrEngine, resolve_engine
-from soota.transcripts.conversion import parse_payload
 from soota.transcripts.download import ensure_audio
+from soota.transcripts.quality import ASR_QUALITY_VERSION, parse_asr_payload
 
 
 def resumes_audio(data: dict[str, object], mode: TranscriptMode, audio_name: str) -> bool:
@@ -109,6 +109,7 @@ class TranscriptResolver:
         engine = self.asr or resolve_engine(self.settings.asr)
         signature = json.dumps(
             [
+                ASR_QUALITY_VERSION,
                 self.settings.asr.model_dump(),
                 engine.name,
                 self.audio_provider.name,
@@ -132,10 +133,8 @@ class TranscriptResolver:
         if isinstance(payload, list):
             # Compatibility for injected ASR engines implementing the older API.
             payload = CaptionPayload(format="soota-segments", body=[s.model_dump() for s in payload])
-        segments = parse_payload(payload, language=language, source=TranscriptSource.ASR)
+        segments = parse_asr_payload(payload, media, language=language)
         item.provenance["caption_format"] = payload.format
-        if not segments:
-            raise TranscriptError("本地转写没有识别到文本。")
         self.audio_provider.records.append(RequestRecord(endpoint=f"local:asr/{engine.name}", billed=False))
         document = TranscriptDocument(
             status=TranscriptStatus.READY,

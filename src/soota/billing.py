@@ -49,6 +49,7 @@ class PaymentGate:
     """One authorization per dispatched billed request; cache reads never enter this gate."""
 
     def __init__(self, settings: SootaSettings, max_cost: float | None = None, *, provider: str = "tikhub") -> None:
+        self.settings = settings
         self.provider = provider
         self.policy: PaymentConfig = settings.payment
         self.root = settings.data_dir / "billing"
@@ -127,6 +128,8 @@ def selected_provider(settings: SootaSettings, explicit: str | None) -> str:
         raise InputError("MCP 接入已停用；请使用 auto、opencli、yt-dlp 或 tikhub。")
     if chosen == "monid" and not settings.monid.enabled:
         raise InputError("Monid 尚未启用；使用 soota providers enable monid。")
+    if chosen == "treg" and not settings.treg.enabled:
+        raise InputError("treg 尚未启用；使用 soota providers enable treg。")
     if chosen == "weir" and not settings.weir.enabled:
         raise InputError("Weir 尚未启用；使用 soota providers enable weir。")
     return chosen
@@ -137,6 +140,7 @@ def provider_enabled(settings: SootaSettings, name: str) -> bool:
         name not in settings.routing.disabled_providers
         and (name != "opencli-mcp" or settings.opencli_mcp.enabled)
         and (name != "monid" or settings.monid.enabled)
+        and (name != "treg" or settings.treg.enabled)
         and (name != "weir" or settings.weir.enabled)
     )
 

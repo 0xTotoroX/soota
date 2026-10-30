@@ -31,6 +31,7 @@ def fake_audio_decode_for_routing_contracts(monkeypatch):
     # These tests use synthetic byte placeholders and fake ASR. Actual decoding
     # and final media acceptance are covered by test_media_* and content tasks.
     monkeypatch.setattr("soota.transcripts.resolver.ensure_audio", lambda path, **kwargs: path)
+    monkeypatch.setattr("soota.transcripts.quality.audio_duration_ms", lambda path: 1000)
 
 
 BILI = "https://www.bilibili.com/video/BV1xx411c7mD"
@@ -214,6 +215,7 @@ def test_confirmed_counterpart_absence_does_not_query_ytdlp(settings, monkeypatc
     assert item.provenance["youtube_check"]["status"] == "youtube_captions_missing"
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_audio_budget_deducts_paid_metadata_already_requested(settings, monkeypatch):
     from soota.providers.opencli_runtime import RuntimeUnavailable
     from soota.providers.tikhub.client import YOUTUBE_INFO, YOUTUBE_STREAMS, TikHubProvider, load_price_snapshot
@@ -269,6 +271,7 @@ def test_none_mode_is_not_reported_as_confirmed_absence(settings, monkeypatch):
     assert result.ok and result.data["transcript_status"] == "not_requested"
 
 
+@pytest.mark.usefixtures("cached_tikhub_prices")
 def test_pending_downie_resume_does_not_repay_caption_query(settings, monkeypatch):
     from soota.providers.downie import DownloadPending
     from tests.unit.test_resolver import _youtube_requester

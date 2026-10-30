@@ -6,7 +6,7 @@
 
 这里的覆盖表示请求 Schema、路由与通用 SDK 调用已接入，不表示 901 个接口逐一通过真实网络验收。标准化 `ingest`、字幕/ASR 和可续跑 `catalog` 目前只适配 YouTube、Bilibili。
 
-`api call` 默认按平台的 api 规则选择来源，可使用 `--provider tikhub` 强制直连，或 `--provider monid` 转发已覆盖接口。来源配置、比较费用和覆盖限制见 [Monid 与来源优先级](monid.md)。接口注册表的覆盖不等于 Monid 全部覆盖。
+`api call` 默认按平台的 api 规则选择来源，可使用 `--provider tikhub` 强制直连，或 `--provider monid` / `--provider treg` 转发各自已覆盖接口。来源配置、比较费用和覆盖限制见 [Monid 与来源优先级](monid.md)。接口注册表的覆盖不等于 Monid 或 treg 全部覆盖；treg 固定映射与自动报价缓存见 [接入说明](treg.md)。
 
 ## 版本规则
 

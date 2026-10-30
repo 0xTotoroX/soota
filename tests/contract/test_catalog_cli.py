@@ -47,7 +47,10 @@ def test_catalog_dry_run_and_input_errors_never_construct_sdk(settings, monkeypa
     assert not settings.output_dir.exists()
 
 
-def test_youtube_cli_budget_resume_and_incremental_through_real_sdk(settings, sdk_transport) -> None:
+def test_youtube_cli_budget_resume_and_incremental_through_real_sdk(
+    settings, sdk_transport, cached_tikhub_prices
+) -> None:
+    cached_tikhub_prices("fixture-key")
     requests = []
 
     def respond(request):
@@ -100,7 +103,8 @@ def test_youtube_cli_budget_resume_and_incremental_through_real_sdk(settings, sd
     assert len(requests) == 4  # Cached alias; one page detects no new videos.
 
 
-def test_bilibili_cli_page_limit_and_resume_keep_page_shape(sdk_transport) -> None:
+def test_bilibili_cli_page_limit_and_resume_keep_page_shape(sdk_transport, cached_tikhub_prices) -> None:
+    cached_tikhub_prices("fixture-key")
     requests = []
 
     def respond(request):
@@ -132,7 +136,8 @@ def test_bilibili_cli_page_limit_and_resume_keep_page_shape(sdk_transport) -> No
     assert requests == [{"uid": "178360345", "pn": "1", "ps": "1"}, {"uid": "178360345", "pn": "2", "ps": "1"}]
 
 
-def test_sdk_does_not_retry_paid_server_errors(settings, sdk_transport) -> None:
+def test_sdk_does_not_retry_paid_server_errors(settings, sdk_transport, cached_tikhub_prices) -> None:
+    cached_tikhub_prices("fixture-key")
     requests = []
 
     def respond(request):
@@ -159,7 +164,7 @@ def test_storage_creation_error_is_single_json_document(settings) -> None:
 
 def test_missing_key_does_not_reserve_request_budget(settings, monkeypatch) -> None:
     monkeypatch.setattr("soota.providers.tikhub.client.load_tikhub_api_key", lambda: None)
-    result = runner.invoke(app, ["catalog", CHANNEL, "--max-cost", "0.001", "--json"])
+    result = runner.invoke(app, ["catalog", CHANNEL, "--provider", "tikhub", "--max-cost", "0.001", "--json"])
     assert result.exit_code == 4
     data = json.loads(result.stdout)["data"]
     assert data["request_count"] == 0

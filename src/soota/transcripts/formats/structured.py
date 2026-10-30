@@ -104,3 +104,19 @@ def youtube_transcript(body: Any) -> list[Cue]:
         end = start + milliseconds(row["duration"], 1000) if row.get("duration") is not None else None
         cues.append(Cue(start, end, text_field(row, "text")))
     return cues
+
+
+def crawl4ai_youtube(body: Any) -> list[Cue]:
+    return youtube_transcript(
+        [
+            {"start": row["start_s"], "duration": row["duration_s"], "text": text_field(row, "text")}
+            for row in objects(decode(body))
+        ]
+    )
+
+
+def scrapecreators_youtube(body: Any) -> list[Cue]:
+    return [
+        Cue(milliseconds(row["startMs"]), milliseconds(row["endMs"]), text_field(row, "text"))
+        for row in objects(decode(body))
+    ]

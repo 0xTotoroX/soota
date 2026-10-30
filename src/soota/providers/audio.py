@@ -10,6 +10,7 @@ from soota.providers.base import AudioProvider
 from soota.providers.downie import DownieProvider
 from soota.providers.monid.provider import MonidProvider
 from soota.providers.priority import ordered_names, quote_rows
+from soota.providers.treg.provider import TregProvider
 from soota.providers.ytdlp import YtDlpProvider
 
 
@@ -19,7 +20,11 @@ def conditional_audio_estimate(
     from soota.providers.tikhub.client import BILI_ONE_V3, BILI_PLAYURL, YOUTUBE_STREAMS, load_price_snapshot
 
     if settings is not None and name != "tikhub":
-        choices = ordered_names(settings, source, "audio", ["yt-dlp", "tikhub", "monid"]) if name == "auto" else [name]
+        choices = (
+            ordered_names(settings, source, "audio", ["yt-dlp", "tikhub", "monid", "treg"])
+            if name == "auto"
+            else [name]
+        )
         if not choices:
             return {"provider": name, "condition": "confirmed_no_captions", "estimated_cost_usd": None}
         row = quote_rows(settings, source, "audio", [choices[0]])[0]
@@ -37,8 +42,8 @@ def conditional_audio_estimate(
 
 def selected_audio_provider(settings: SootaSettings, explicit: str | None) -> str:
     name = explicit or settings.audio.provider
-    if name not in {"auto", "yt-dlp", "downie", "tikhub", "monid"}:
-        raise InputError("--audio-provider 支持 auto/yt-dlp/downie/tikhub/monid。")
+    if name not in {"auto", "yt-dlp", "downie", "tikhub", "monid", "treg"}:
+        raise InputError("--audio-provider 支持 auto/yt-dlp/downie/tikhub/monid/treg。")
     return name
 
 
@@ -67,12 +72,12 @@ def audio_provider(
     if asset is not None:
         return ExistingAudioProvider(asset)
     selected_provider(settings, name)
-    if remaining_cost is not None and name in {"auto", "monid"}:
+    if remaining_cost is not None and name in {"auto", "monid", "treg"}:
         return DeferredAudioProvider(settings, name, paid_factory, remaining_cost)
     if name == "auto":
         return RankedAudioProvider(settings, paid_factory, max_cost)
-    if name == "monid":
-        return MonidProvider(settings, max_cost, purpose="audio")
+    if name in {"monid", "treg"}:
+        return (TregProvider if name == "treg" else MonidProvider)(settings, max_cost, purpose="audio")
     if name == "yt-dlp":
         return YtDlpProvider(settings)
     if name == "downie":
@@ -95,7 +100,7 @@ class RankedAudioProvider:
 
     def get_audio(self, item: MediaItem) -> AudioAsset:
         choices = ordered_names(
-            self.settings, item.source, "audio", ["yt-dlp", "tikhub", "monid"], max_cost=self.max_cost
+            self.settings, item.source, "audio", ["yt-dlp", "tikhub", "monid", "treg"], max_cost=self.max_cost
         )
         if not choices:
             raise InputError("没有可用音频来源。")

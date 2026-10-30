@@ -21,6 +21,7 @@ from soota.config import SootaSettings
 from soota.errors import InputError, SourceError
 from soota.features import read_params
 from soota.models import CommandResult, TranscriptMode
+from soota.providers.quotes import online_prices
 from soota.routing import recognize
 from soota.tasks.inputs import parse_inputs, parse_outputs
 from soota.tasks.models import InputSpec, TaskSpec
@@ -54,6 +55,7 @@ def execution_context(
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
+@online_prices
 def ingest(
     settings: SootaSettings,
     url: str | None = None,

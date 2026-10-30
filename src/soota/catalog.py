@@ -1,3 +1,11 @@
+"""目录采集与恢复。
+
+[INPUT]: 来源、排序/预算、分页限制与可选的创建回调。
+[OUTPUT]: 目录结果、游标和原请求预留；回调在首个请求前提供子任务身份。
+[POS]: 独立目录入口，供统一任务复用；不清零恢复费用。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import math
@@ -18,9 +26,11 @@ from soota.providers.opencli import OpenCLIProvider
 from soota.providers.opencli_context import resolve_profile
 from soota.providers.opencli_mcp import OpenCLIMCPProvider
 from soota.providers.opencli_runtime import RuntimeUnavailable
+from soota.providers.quotes import online_prices
 from soota.providers.router import catalog_provider, validate_policy
 from soota.providers.tikhub.catalog import YOUTUBE_CHANNEL_ID, catalog_endpoint, is_channel_id
 from soota.providers.tikhub.client import TikHubProvider, load_price_snapshot
+from soota.providers.treg.provider import TregProvider
 from soota.render.catalog import write_catalog
 from soota.routing import recognize
 from soota.secrets import redact_any
@@ -73,6 +83,7 @@ def estimate_catalog(
         provider,
         mcp_available=max_items <= 100 and StdioMCPClient.available(settings.opencli_mcp),
         settings=settings,
+        max_cost=max_cost,
     )
     selected_provider(settings, selected)
     if fallback:
@@ -107,7 +118,7 @@ def estimate_catalog(
     if source.platform == "youtube" and not is_channel_id(source.id):
         counts[YOUTUBE_CHANNEL_ID] = 1
     prices = snapshot.get("endpoints", {})
-    if selected == "monid":
+    if selected in {"monid", "treg"}:
         from soota.providers.priority import quote_rows
 
         prices = {
@@ -141,6 +152,7 @@ def estimate_catalog(
     )
 
 
+@online_prices
 def catalog(
     settings: SootaSettings,
     url: str,
@@ -154,17 +166,29 @@ def catalog(
     provider: str | None = None,
     fallback: str | None = None,
     requester: Callable[..., Any] | None = None,
+    _on_created: Callable[[CatalogJob], None] | None = None,
 ) -> CommandResult:
     _validate_limits(max_items, max_pages, max_cost)
     source = recognize(url)
     provider = selected_provider(settings, provider)
     validate_policy(provider, fallback, max_cost)
-    selected = catalog_provider(
-        source,
-        provider,
-        mcp_available=max_items <= 100 and StdioMCPClient.available(settings.opencli_mcp),
-        settings=settings,
-    )
+    try:
+        selected = catalog_provider(
+            source,
+            provider,
+            mcp_available=max_items <= 100 and StdioMCPClient.available(settings.opencli_mcp),
+            settings=settings,
+            max_cost=max_cost,
+        )
+    except AuthBudgetError as exc:
+        return CommandResult(
+            ok=False,
+            status="error",
+            code=exc.code,
+            exit_code=exc.exit_code,
+            message=exc.message,
+            data={"request_count": 0, "requests_this_run": 0, "stop_reason": "budget_or_auth", "error": exc.to_dict()},
+        )
     if fallback:
         raise InputError("当前目录来源没有已验证的替代分页契约；不能启用目录 fallback。")
     if selected in {"opencli", "opencli-mcp"} and max_items > (100 if selected == "opencli-mcp" else 200):
@@ -200,11 +224,14 @@ def catalog(
         }
     )
     with store.lock(record["id"]):
+        if _on_created is not None:
+            _on_created(CatalogJob.model_validate(record))
         return _execute(
             settings, CatalogJob.model_validate(record), store, requester, allow_free_fallback=provider == "auto"
         )
 
 
+@online_prices
 def resume_catalog(
     settings: SootaSettings,
     job_id: str,
@@ -289,14 +316,14 @@ def _provider(
         CostLedger(settings.ledger_path).append(job.source.id, [record], {"job_id": job.id, "reservation": True})
 
     provider = (
-        MonidProvider(
+        (TregProvider if job.provider == "treg" else MonidProvider)(
             settings,
             float(Decimal(str(job.max_cost)) - _reserved_cost(job)) if job.max_cost is not None else None,
             purpose="catalog",
             before_request=reserve,
             run_scope="catalog:" + job.id,
         )
-        if job.provider == "monid"
+        if job.provider in {"monid", "treg"}
         else TikHubProvider(
             runtime_python=settings.tikhub.runtime_python,
             cache=CacheStore(settings.cache_dir),

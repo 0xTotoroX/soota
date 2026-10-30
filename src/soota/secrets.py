@@ -15,6 +15,8 @@ REDACTED = "[redacted]"
 CREDENTIAL_FIELDS = frozenset(
     {
         "authorization",
+        "x-treg-token",
+        "treg_token",
         "api_key",
         "apikey",
         "cookie",

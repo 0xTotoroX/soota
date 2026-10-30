@@ -26,6 +26,7 @@ from soota.models import (
     TranscriptSource,
     TranscriptStatus,
 )
+from soota.providers.quotes import cached_quote, namespace
 from soota.providers.tikhub.capability import capabilities_for
 from soota.providers.tikhub.catalog import (
     YOUTUBE_CHANNEL_ID,
@@ -145,16 +146,32 @@ class TikHubProvider:
         payload = self._call(path, params, billed=True)
         return parse_catalog_page(source, payload, cursor, page_size)
 
-    def endpoint_price(self, endpoint: ApiEndpoint) -> float:
-        payload = self._call(ENDPOINT_INFO, {"endpoint": endpoint.path}, billed=False)
-        data = unwrap(payload)
-        if data.get("endpoint_uri") != endpoint.path:
-            raise ContractError("TikHub 返回了不同接口的价格信息。")
-        price = data.get("endpoint_cost")
-        if isinstance(price, bool) or not isinstance(price, (int, float)):
-            raise AuthBudgetError("该接口价格未知。")
+    def endpoint_price(self, endpoint: ApiEndpoint, *, refresh: bool = False) -> float:
+        def fetch() -> dict[str, Any]:
+            payload = self._call(ENDPOINT_INFO, {"endpoint": endpoint.path}, billed=False)
+            data = unwrap(payload)
+            if data.get("endpoint_uri") != endpoint.path:
+                raise ContractError("TikHub 返回了不同接口的价格信息。")
+            price = data.get("endpoint_cost")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price < 0:
+                raise AuthBudgetError("该接口价格未知。")
+            return {"estimated_cost_usd": float(price)}
+
+        detail = (
+            cached_quote(
+                self.payment_gate.settings,
+                "tikhub",
+                namespace(self.base_url, self.api_key or ""),
+                endpoint.path,
+                fetch,
+                refresh=refresh,
+            )
+            if self.payment_gate is not None
+            else fetch()
+        )
+        price = float(detail["estimated_cost_usd"])
         self.snapshot.setdefault("endpoints", {})[endpoint.path] = price
-        return float(price)
+        return price
 
     def query(
         self, endpoint: ApiEndpoint, params: dict[str, Any], body: Any = None, *, allow_auxiliary: bool = False
@@ -410,9 +427,12 @@ class TikHubProvider:
     def _call(
         self, path: str, params: dict[str, Any], *, billed: bool, method: str = "GET", json_body: Any = None
     ) -> Any:
-        client: Any = self._sdk() if self._requester is None else None
+        if billed and self.payment_gate is not None and self.payment_gate.cap == 0:
+            raise AuthBudgetError("--max-cost 0 禁止发送计费接口请求。")
         prices = self.snapshot.get("endpoints", {})
         cost = prices.get(path)
+        if billed and self.payment_gate is not None:
+            cost = self.endpoint_price(load_registry().resolve(path))
         record = RequestRecord(
             endpoint=path,
             billed=billed,
@@ -430,6 +450,7 @@ class TikHubProvider:
                     return self._requester(method, path, params)
                 return self._requester(method, path, params, json=json_body)
             try:
+                client = self._sdk()
                 return client._request(method, path, params=params, json=json_body)
             except SootaError:
                 raise

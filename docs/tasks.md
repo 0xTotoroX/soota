@@ -10,6 +10,7 @@ Windows 的任务文件、缓存和恢复输入按 UTF-8 读写，任务锁与�
 
 | 目的 | 入口 | 契约 |
 | --- | --- | --- |
+| 从目标比较方案、保存预设、下次确认复用 | `soota plan create/select/run`、`soota presets` | [目标规划与预设](planning.md) |
 | 采集原文、媒体或数据 | `soota ingest`，以 `soota jobs resume` 接续 | 本文 |
 | 单来源分析、笔记、文章、大纲、渲染或整包导出 | 外部 `lorelab content` | [迁移说明](knowledge.md) |
 | 从 Cubox 收藏或已有内容包整理多源文章、写入并核对 | 外部 `lorelab knowledge` | [迁移说明](knowledge.md) |
@@ -53,13 +54,17 @@ soota ingest "文章 URL" --want context --optional images --max-cost 0 --json
 
 `--language` 要求实际字幕语言，不能用语言未知或其他语言的轨道冒充。本地字幕未提供可靠语言元数据时保留未知，不按默认偏好填成中文。`--min-height` 指定视频最低高度，`--max-bytes` 限制单个媒体文件大小。字幕导出支持 `srt,vtt,txt,json`；缺少时间轴时可以导出 TXT/JSON，不能生成虚构时间的 SRT/VTT。
 
+包含 `--optional` 时，整批必需目标及其依赖先执行；全部完成后再用剩余额度取得可选产物。必需阶段失败则跳过可选阶段，不自动重试失败条目。两个阶段共用原任务、有效产物和预算预留，避免可选下载挤占后续条目的必需费用。
+
 字幕模式沿用 `auto`、`captions-only`、`asr`、`none`：`auto` 只在确认无字幕时进入本地转写，`asr` 明确要求语音转写，`none` 不请求字幕。只取元数据可用 `inspect` 或 `--want data`；没有可复用正文且禁止取得字幕或转写时，CLI 会报告缺少目标产物。
 
 ## Provider 优先级
 
-`--provider auto` 使用按平台和能力保存的 cost/manual 规则；`--provider monid` 显式使用可选 Monid。通过 `providers auth/enable/disable/priority set/priority show` 配置，详见 [Monid 与来源优先级](monid.md)。元数据、字幕、目录、原生 API、音频分别比较，不按平台给出一个混合单价。Monid 报价预留与其他付费来源共享任务累计上限，异步恢复查询原 runId；无字幕结果也可能收费。
+`--provider auto` 使用按平台和能力保存的 cost/manual 规则；`--provider monid` 或 `--provider treg` 显式使用对应的可选来源。通过 `providers auth/enable/disable/priority set/priority show` 配置，详见 [Monid 与来源优先级](monid.md)。元数据、字幕、目录、原生 API、音频分别比较，不按平台给出一个混合单价。Monid 报价预留与其他付费来源共享任务累计上限，异步恢复查询原 runId；无字幕结果也可能收费。
 
-`monid.<TikHub 接口 key>` 原生任务只取得已经登记的读取契约，不自动提供任意平台的文章或字幕转换。`tikhub.<key>` 在 auto 下遵守 api 规则，显式 `--provider tikhub` 强制直连。
+`monid.<TikHub 接口 key>` 和 `treg.<TikHub 接口 key>` 原生任务只取得已经登记的读取契约，不自动提供任意平台的文章或字幕转换。`tikhub.<key>` 在 auto 下遵守 api 规则，显式 `--provider tikhub` 强制直连。
+
+在线执行的报价默认 24 小时过期；过期或缺失时自动刷新，阶段、条目及并行 worker 共用报价缓存。刷新失败不会沿用旧价收费。恢复任务会重新核对有效期，但保留原有费用预留。treg 已知实付超价会在任务账本记录暂停原因，阻止后续收费，恢复或提高上限也不清除暂停。treg 的已完成回执可在同一任务恢复时复用；提交结果不明、202 或非完成响应保留回执并停止，当前不自动重发或轮询恢复。支持范围与配置见 [treg](treg.md)。
 
 ## 本地文件、清单与旧内容包
 
@@ -245,4 +250,4 @@ soota ingest "帖子 URL" --provider weir --want context,markdown,data --weir-ma
 soota jobs resume JOB_ID --weir-max-credits 100 --json
 ```
 
-`providers limits weir --monthly-credits N --task-credits N` 配置跨任务月度上限和新任务默认上限；单任务参数覆盖默认值，续跑参数是新总上限。所有 worker 共用持久账本，跨月不清除任务累计，缓存不重复扣费。`weir_credits` 分别报告实际扣费、未决预留及累计值；不能把 credits 混入 USD 估算。默认仅免费模式，付费等级或购买余额会被拒绝；`--max-cost 0` 继续禁止新的 credits 计费请求。来源、计费估算、外部并发和失败恢复的完整边界见 [Weir](weir.md)。
+`providers limits weir --monthly-credits N --task-credits N` 配置跨任务月度上限和新任务默认上限；单任务参数覆盖默认值，续跑参数是新总上限。所有 worker 和 Key 共用持久账本；月度上限按统一 UTC 自然月累计，跨月不清除任务累计，缓存不重复扣费。`providers auth weir --key-name NAME` 添加备用，`providers keys weir` 查看顺序及启用状态。新的数据请求按配置顺序持久轮询；只有明确认证 401 才在同一请求内尝试下一个 Key，余额不足、限流、上游错误与未知扣费停止。`weir_credits` 分别报告实际扣费、未决预留及累计值；不能把 credits 混入 USD 估算。默认仅免费模式，付费等级或购买余额会被拒绝；`--max-cost 0` 继续禁止新的 credits 计费请求。来源、计费估算、外部并发和失败恢复的完整边界见 [Weir](weir.md)。

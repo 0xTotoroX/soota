@@ -25,6 +25,34 @@ def block_external_http(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_credentials(monkeypatch):
+    # Tests use synthetic credentials; even read-only quotes must not open the user's Keychain.
+    for name in ("TIKHUB_API_KEY", "MONID_API_KEY", "TREG_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("soota.secrets._load_keychain", lambda *args: None)
+
+
+@pytest.fixture
+def cached_tikhub_prices(settings):
+    """Existing acquisition tests start with a fresh, explicit cached price table."""
+    from soota.providers.quotes import cached_quote, namespace
+    from soota.providers.tikhub.client import load_price_snapshot
+
+    def seed(credential=""):
+        for path, price in load_price_snapshot()["endpoints"].items():
+            cached_quote(
+                settings,
+                "tikhub",
+                namespace(settings.tikhub.base_url, credential),
+                path,
+                lambda price=price: {"estimated_cost_usd": price},
+            )
+
+    seed()
+    return seed
+
+
+@pytest.fixture(autouse=True)
 def block_browser_commands(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError("Tests must stub OpenCLI; never use the user's browser.")

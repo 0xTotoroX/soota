@@ -4,6 +4,8 @@ Read this for combinations, batches, local inputs, existing bundles, explicit na
 
 ## Translate the request into targets
 
+Conversational acquisition goals first use [goal planning and presets](planning.md): present alternatives, ask before reusing a matched preset, select/save after confirmation, then execute. Explicit `ingest` calls remain available; they do not automatically create named presets.
+
 Use only targets requested or necessary for the task:
 
 | Request | CLI target |
@@ -18,6 +20,8 @@ Use only targets requested or necessary for the task:
 For downstream knowledge delivery, save pasted text as a `.txt` file and ingest with `--provider local --want context`. Hand the returned v2 bundle to the LoreLab Skill: content handles analysis, notes, articles, outlines and export; knowledge/study handle knowledge and learning delivery. Ordinary chat summaries need no ingest or archive. Do not pass prose or a Cubox response directly as share text or an input list; collection still stops at the requested source artifacts.
 
 `markdown` keeps the same unprocessed-text boundary as context. Do not map “download this article” to a semantic rewrite. Put optional outputs in `--optional`; do not downgrade a user-required target merely to obtain a successful exit code.
+
+Required outputs and their dependencies run across the whole batch before optional acquisition uses the remaining budget. If a required item fails, optional acquisition is skipped; it does not trigger an automatic second attempt. Resume retains the same artifacts and reservations.
 
 Examples use placeholders:
 
@@ -39,7 +43,7 @@ On Windows, external yt-dlp media downloads (including HLS/DASH) and FFmpeg extr
 
 ## Discover only when needed
 
-Known standard tasks can go directly to `ingest`. For an unfamiliar operation, use `capabilities --search ... --json`; inspect the current input contract and state before choosing a command. This discovery does not query websites or authenticate accounts.
+Known standard tasks need no extra capability discovery. For an unfamiliar operation, use `capabilities --search ... --json`; inspect the current input contract and state before choosing a command. This discovery does not query websites or authenticate accounts.
 
 ```bash
 soota capabilities --provider opencli --search search --limit 20 --json
@@ -50,7 +54,7 @@ soota ingest --operation opencli.youtube.search --param query=example \
 
 `native` means the raw operation is callable under its contract; `standard` means a reviewed result conversion exists. Neither proves live site success. `--expand` needs a bound list result; do not recursively extract arbitrary URLs from provider JSON. If only native data is supported, deliver that data and report the missing standard contract.
 
-TikHub operations use `tikhub.<endpoint>` and parameters from `api show`. Optional Monid accepts `monid.<endpoint>` for the covered TikHub read contracts; auto routing of `tikhub.<endpoint>` also follows the platform api priority. Use `providers priority set PLATFORM CAPABILITY --mode cost` or `--mode manual --order ...`, and `providers priority show ... --refresh` for free quote refresh. Explicit `--provider` overrides the rule. They remain subject to payment policy and the shared task budget. Publicly saved data redacts credentials and signed links. Media acquisition must use the controlled internal descriptor, not URLs copied from a redacted JSON file.
+TikHub operations use `tikhub.<endpoint>` and parameters from `api show`. Optional Monid and treg accept `monid.<endpoint>` / `treg.<endpoint>` for their covered TikHub read contracts; auto routing of `tikhub.<endpoint>` also follows the platform api priority. Use `providers priority set PLATFORM CAPABILITY --mode cost` or `--mode manual --order ...`, and `providers priority show ... --refresh` for free quote refresh. Explicit `--provider` overrides the rule. Online execution refreshes missing/expired quotes automatically and shares them across workers. treg pending/unknown receipts must not be resubmitted or cleared; completed receipts can be reused in the original task. They remain subject to payment policy and the shared task budget. Publicly saved data redacts credentials and signed links. Media acquisition must use the controlled internal descriptor, not URLs copied from a redacted JSON file.
 
 ## Continue a saved task
 
@@ -87,4 +91,4 @@ Report actual source-bundle paths and acquisition completion. A preserved histor
 
 ## Weir free-credit tasks
 
-Use `ingest URL --provider weir --want context --weir-max-credits N` for X status/Article carrier links and Reddit posts. Full-body acquisition can include `markdown,data`; data-only/native operations, search, comments and threads are not bound. `providers limits weir --monthly-credits N --task-credits N` configures local monthly/default task caps. Resume `--weir-max-credits N` sets a new cumulative total, never a fresh allowance. Free-only mode refuses paid tiers or purchased balances; no concurrent top-ups. `--max-cost 0` also blocks new credit calls, while valid caches remain usable. Usage includes uncertain reservations; never delete the ledger to retry. See [Weir](../../../docs/weir.md) for fee-estimate and cross-client boundaries.
+Use `ingest URL --provider weir --want context --weir-max-credits N` for X status/Article carrier links and Reddit posts. Full-body acquisition can include `markdown,data`; data-only/native operations, search, comments and threads are not bound. `providers limits weir --monthly-credits N --task-credits N` configures local monthly/default task caps. Resume `--weir-max-credits N` sets a new cumulative total, never a fresh allowance. Free-only mode refuses paid tiers or purchased balances; no concurrent top-ups. `--max-cost 0` also blocks new credit calls, while valid caches remain usable. Usage includes uncertain reservations; never delete the ledger to retry. Multiple keys use `providers auth weir --key-name NAME` and `providers keys weir`; new data calls use durable ordered round-robin, while only confirmed authentication 401 skips to the next key within that call. Every key shares the UTC calendar-month cap, existing task identity and pending reservations. Replacing a key does not re-fetch a successful carrier checkpoint during Article recovery. See [Weir](../../../docs/weir.md) for fee-estimate and cross-client boundaries.

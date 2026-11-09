@@ -39,7 +39,7 @@ def test_platform_inventory_and_endpoint_search_are_offline(settings, monkeypatc
     assert listed.exit_code == 0
     platforms = {row["platform"]: row for row in json.loads(listed.stdout)["data"]["platforms"]}
     assert set(platforms) == set(PLATFORM_NAMES)
-    assert platforms["wechat_mp"]["normalized"] == {}
+    assert platforms["wechat_mp"]["normalized"]["user"]["catalog"]
     assert platforms["bilibili"]["normalized"]["user"]["catalog"]
     assert not any(row["live_verified"] for row in platforms.values())
     matched = runner.invoke(app, ["api", "list", "--platform", "instagram", "--task", "comments", "--json"])

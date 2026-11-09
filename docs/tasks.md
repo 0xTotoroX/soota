@@ -2,9 +2,19 @@
 
 `ingest` 接受链接、本地文件、输入清单和已有内容包，通过 `--want` 选择目标产物。每个条目使用相同的获取、处理和保存流程；同一批任务共享费用上限，并保留逐项进度。
 
-默认获取供 Agent 使用的原文 context，不润色、合段、总结或生成文章。没有 `--want` 的原有 YouTube/Bilibili 单视频命令保留旧输出契约；显式目标及新输入使用 v2 内容包。高层职责图见 [处理流程与职责](providers.md#处理流程与职责)。
+默认获取供 Agent 使用的原文 context，不润色、合段、总结或生成文章。未启用分离存储时，没有 `--want` 的原有 YouTube/Bilibili 单视频命令保留旧输出契约；显式目标及新输入默认使用 v2 内容包。显式设置 `storage.control_dir` 后，新 ingest 请求使用 v3 双根包。高层职责图见 [处理流程与职责](providers.md#处理流程与职责)。
 
 Windows 的任务文件、缓存和恢复输入按 UTF-8 读写，任务锁与共享预算使用内核互斥，恢复不会清除预留。需要外部 yt-dlp 下载或 FFmpeg 提取／合轨的媒体目标，因无法保证硬文件字节上限而明确停止；不会将必需目标降为可选，也不会回退为无上限调用。已有媒体、字幕和直接 HTTP 文件的边界见 [Windows 运行](providers.md#windows-运行)。
+
+## 可选的分离存储
+
+`[soota].output_dir` / `SOOTA_OUTPUT_DIR` / `--output` 指定原件根；显式设置 `[storage].control_dir`（或 `SOOTA_CONTROL_DIR`）后，新请求使用 v3 控制包。两个根下按平台与来源 ID 保存条目：原件根只有正文、时间轴字幕、所选字幕导出、图片、媒体和原始数据；控制根保存 manifest、context、结构化正文/字幕、后续分析和机器回执。根不能重叠。已有 v1/v2 包与冻结任务不自动迁移。
+
+v3 manifest 的 `raw_root` 是条目的显式绝对原件根，`artifacts[].storage` 为 `raw` 或 `control`，`path` 始终是对应根内的相对路径；每项仍登记大小和 SHA-256。使用 `artifact_path(folder, bundle, name)` 读取产物，不能直接把所有相对路径拼到 manifest 目录。加载、验证、媒体复用、字幕导出与 LoreLab 接续共用该接口。原件或控制根中的越界、符号链接逃逸及已修改文件会阻止复用或覆盖。
+
+`[storage].jobs_dir` / `SOOTA_JOBS_DIR` 可将新任务记录与请求目录放到显式的私有状态根；请求目录为 `<jobs_dir>/<job_id>/`。该字段默认 `None`，沿用原 `data_dir/jobs` 与 `data_dir/tasks`。全局账本、费用策略、凭据和缓存仍在原位置，不随 jobs 配置迁移。恢复从 job 记录的 `spec_path` 读取冻结请求及预算，不用新偏好重建任务；支持原 job JSON、任务目录或 `request.json` 的绝对路径，传 ID 时可回查原 `data_dir/jobs`。
+
+全局 `config.toml` 的 `[soota].preferences_file` 可引用用户 TOML；`SOOTA_PREFERENCES_FILE` 优先。文件不存在时使用原配置，语法错误时报错；`settings.preferences_path` 返回实际路径。偏好只合并显式字段（含 `soota`、`storage`、ASR、来源/路由和内容选择），未填写项保留全局值，环境变量优先。相对输出/存储路径按偏好文件所在目录解析。凭据、全局状态位置和独立费用策略不从该文件读取或迁移。独立 Soota 与 LoreLab 使用相同配置加载器。
 
 ## 选择入口
 
@@ -251,3 +261,16 @@ soota jobs resume JOB_ID --weir-max-credits 100 --json
 ```
 
 `providers limits weir --monthly-credits N --task-credits N` 配置跨任务月度上限和新任务默认上限；单任务参数覆盖默认值，续跑参数是新总上限。所有 worker 和 Key 共用持久账本；月度上限按统一 UTC 自然月累计，跨月不清除任务累计，缓存不重复扣费。`providers auth weir --key-name NAME` 添加备用，`providers keys weir` 查看顺序及启用状态。新的数据请求按配置顺序持久轮询；只有明确认证 401 才在同一请求内尝试下一个 Key，余额不足、限流、上游错误与未知扣费停止。`weir_credits` 分别报告实际扣费、未决预留及累计值；不能把 credits 混入 USD 估算。默认仅免费模式，付费等级或购买余额会被拒绝；`--max-cost 0` 继续禁止新的 credits 计费请求。来源、计费估算、外部并发和失败恢复的完整边界见 [Weir](weir.md)。
+
+## 微信单篇匿名获取
+
+```sh
+soota ingest 'https://mp.weixin.qq.com/s/ARTICLE_TOKEN' --want context,markdown,data --max-cost 0 --json
+soota ingest 'https://mp.weixin.qq.com/s?__biz=BIZ&mid=MID&idx=1&sn=SN' --want context,images --provider http --max-cost 0 --json
+```
+
+微信单篇在 `auto` 下默认使用内部 HTTP 入口；`--provider http` 显式选择同一入口。请求使用固定桌面 User-Agent，不读取个人 Cookie/浏览器指纹，去掉分享链接中的无关访问参数，重定向也不携带 Cookie。显式 `opencli` 仍使用原有命令绑定。
+
+`content/wechat.py` 只解析格式：读取 `#js_content`，保留原文顺序、懒加载图片和代码行，去除平台二维码/赞赏容器。标题、公众号名、DOM 或脚本发布时间、`__biz/mid/idx/sn` 和页面挂载的 `album_ids` 写入 `manifest.json` 的 `metadata.provenance.wechat`；短链接包保留原任务身份，`metadata.provenance.resolved_source` 记录已解析的稳定文章身份。正文进入 `body.md/content.json/context.md`；选择 `data` 时保存原始页面及元数据到 `data.json`。选择 `images` 时携带文章 Referer 下载，写入附件并更新 Markdown 引用，同时保留作者和发布时间。图片下载仍执行现有大小限制及媒体验证。
+
+只有状态页明确表示发布者删除或违规无法查看才返回 `remote_deleted`，携带 `retryable=false`、来源 URL、原因、响应 SHA-256 和状态文本。普通续跑保留此证据并跳过该条目，显式 `--force` 可重新核查。环境异常或去验证页面返回 `verification_required`，不自动打开浏览器、绕过验证或换源。HTTP 403/404、未知页面、正文为空都不证明文章已删除。错误页不生成成功正文；任务仍报告必需产物未完成。LoreLab tracking 可用该错误/任务 JSON 登记确认删除回执。

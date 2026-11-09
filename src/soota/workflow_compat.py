@@ -41,9 +41,10 @@ def needs_workflow(request: dict[str, Any]) -> bool:
 
 
 def job_needs_workflow(settings: SootaSettings, job_id: str) -> bool:
-    from soota.storage.jobs import JobStore
+    from soota.storage.jobs import JobStore, bind_job
     from soota.tasks.state import task_folder
 
+    settings, job_id = bind_job(settings, job_id)
     record = JobStore(settings.jobs_dir).get(job_id)
     if record.get("kind") != "content-task":
         return False

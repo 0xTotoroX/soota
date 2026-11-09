@@ -17,7 +17,7 @@ Use only targets requested or necessary for the task:
 | Return native query data | `--want data` |
 
 
-For downstream knowledge delivery, save pasted text as a `.txt` file and ingest with `--provider local --want context`. Hand the returned v2 bundle to the LoreLab Skill: content handles analysis, notes, articles, outlines and export; knowledge/study handle knowledge and learning delivery. Ordinary chat summaries need no ingest or archive. Do not pass prose or a Cubox response directly as share text or an input list; collection still stops at the requested source artifacts.
+For downstream knowledge delivery, save pasted text as a `.txt` file and ingest with `--provider local --want context`. Hand the returned v2/v3 bundle to the LoreLab Skill: content handles analysis, notes, articles, outlines and export; knowledge/study handle knowledge and learning delivery. Ordinary chat summaries need no ingest or archive. Do not pass prose or a Cubox response directly as share text or an input list; collection still stops at the requested source artifacts.
 
 `markdown` keeps the same unprocessed-text boundary as context. Do not map “download this article” to a semantic rewrite. Put optional outputs in `--optional`; do not downgrade a user-required target merely to obtain a successful exit code.
 
@@ -33,7 +33,7 @@ soota ingest --inputs-file "/path/to/links.txt" --want context --workers 2 --max
 soota ingest "/path/to/bundle/manifest.json" --want context --json
 ```
 
-Input lists accept one link/path per line or a JSON `inputs`/`items` array. Relative paths resolve beside the input list. Existing v1/v2 bundles can supply their saved source and artifacts. Ordinary directories are not recursively imported. Local media processing must preserve original files and neighboring files.
+Input lists accept one link/path per line or a JSON `inputs`/`items` array. Relative paths resolve beside the input list. Existing v1/v2/v3 bundles can supply their saved source and artifacts. Ordinary directories are not recursively imported. Local media processing must preserve original files and neighboring files.
 
 `--workers N` bounds independent items to 1–8, default 1. Enumeration is sequential and deduplication keeps the first occurrence; `items` remain in input order even if completion differs. Inputs resolving to the same bundle directory run sequentially; semantic processing and exports belong to LoreLab content. One item's failure does not stop other items. Worker checkpoints merge only that item's snapshot under a lock, and each worker receives the caller's context variables including the shared task budget. Paid allocation follows reservation order, not input priority.
 
@@ -66,6 +66,8 @@ soota jobs resume JOB_ID --workers 2 --json
 soota jobs resume JOB_ID --max-items 40 --max-pages 6 --max-cost 0.10 --json
 ```
 
+New v3 tasks freeze `TaskSpec.output` (raw root) and `control_dir` separately. Each artifact records its root and SHA-256. Changing current preferences never relocates a frozen job; when the jobs root changes, resume with the original job JSON, task directory or `request.json` absolute path. `storage.jobs_dir` defaults to the old jobs path and never changes the global ledger/auth roots. Read `docs/tasks.md` for optional preferences TOML and storage settings.
+
 Resume limits are new totals. Budget reservations survive errors, process interruption and later resumes. `--max-cost 0` blocks all billed requests; it does not prohibit local ASR or free downloads. Do not retry authentication, payment, rate-limit or format-contract failures as if they were known absent content. Continue independent authorized outputs when available and report the actual blocker.
 
 OpenCLI exposes safe typed diagnostics: `details.upstream_code`, `exit_code`, `category`, `reason`, `retryable`, and attempts for that dispatch, plus a fixed recovery `hint`. Local timeouts have no upstream exit code; unknown codes become `UNKNOWN`. Raw stderr, headers, trace paths and private URLs are omitted. There is no automatic replay. For a confirmed transient, authorized free read, use `jobs resume JOB_ID --max-cost 0 --json` after checking every unfinished item. Resume retains successful verified artifacts but does not filter failures by `retryable`; resolve mixed blockers first or create a bounded input list of reviewed retryable reads. Do not replay writes, paid requests, login/rate limits or uncertain outcomes automatically.
@@ -80,7 +82,7 @@ New tasks persist the random scope used for an unbound browser context, so repea
 
 ## Hand semantic or export requests to LoreLab
 
-New Soota tasks accept only `video/audio/transcript/context/markdown/images/data`. Use LoreLab content and its Skill for `note/article/analysis/outline`, analysis submissions, rendering or an explicit `--destination` / `--vault` / `--subdir`. `--output` remains the acquisition bundle location. Source collection and raw bundles work independently without LoreLab.
+New Soota tasks accept only `video/audio/transcript/context/markdown/images/data`. Use LoreLab content and its Skill for `note/article/analysis/outline`, analysis submissions, rendering or an explicit `--destination` / `--vault` / `--subdir`. `--output` remains the acquisition bundle location by default; when `storage.control_dir` is explicitly set, it selects the raw root and the returned manifest/context live in the control package. Source collection and raw bundles work independently without LoreLab.
 
 Locate the LoreLab Skill with `lorelab skills list`; its `references/content.md` owns writing, schema guidance, classification review and export. New commands are `lorelab content ingest`, `lorelab content resume JOB --analysis FILE`, `lorelab content render --bundle PATH --analysis FILE`, and `lorelab content export --bundle PATH --destination PATH` (or `--vault PATH --subdir DIR`). Knowledge/study jobs retain their own submission interfaces and frozen state.
 
@@ -92,3 +94,9 @@ Report actual source-bundle paths and acquisition completion. A preserved histor
 ## Weir free-credit tasks
 
 Use `ingest URL --provider weir --want context --weir-max-credits N` for X status/Article carrier links and Reddit posts. Full-body acquisition can include `markdown,data`; data-only/native operations, search, comments and threads are not bound. `providers limits weir --monthly-credits N --task-credits N` configures local monthly/default task caps. Resume `--weir-max-credits N` sets a new cumulative total, never a fresh allowance. Free-only mode refuses paid tiers or purchased balances; no concurrent top-ups. `--max-cost 0` also blocks new credit calls, while valid caches remain usable. Usage includes uncertain reservations; never delete the ledger to retry. Multiple keys use `providers auth weir --key-name NAME` and `providers keys weir`; new data calls use durable ordered round-robin, while only confirmed authentication 401 skips to the next key within that call. Every key shares the UTC calendar-month cap, existing task identity and pending reservations. Replacing a key does not re-fetch a successful carrier checkpoint during Article recovery. See [Weir](../../../docs/weir.md) for fee-estimate and cross-client boundaries.
+
+## WeChat source pages
+
+WeChat single articles use anonymous HTTP by default (`auto` or explicit `http`), with a standard desktop User-Agent and no personal cookies/fingerprints. Body conversion preserves source order, lazy images and code; `--want images` downloads with Referer. Metadata includes account name, publication time, stable identity and attached album IDs. `data` includes the original HTML. Explicit OpenCLI remains available but is not required for the default route.
+
+`remote_deleted` is a terminal acquisition error only when the status page explicitly confirms publisher deletion or policy removal. Preserve its source URL, response hash and status evidence; ordinary resume skips it, explicit `--force` rechecks it. `verification_required`, empty pages and HTTP failures are not deletion evidence. Do not open a browser or switch providers automatically. A source task with missing required artifacts remains unfinished even if downstream tracking accounts for a confirmed deletion.

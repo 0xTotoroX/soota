@@ -61,13 +61,14 @@ def should_update(
 
         if job_needs_workflow(settings, values["job_id"]):
             return False
-        from soota.storage.jobs import JobStore
+        from soota.storage.jobs import JobStore, bind_job
 
-        record = JobStore(settings.jobs_dir).get(values["job_id"])
+        settings, bound_id = bind_job(settings, values["job_id"])
+        record = JobStore(settings.jobs_dir).get(bound_id)
         if record.get("kind") == "content-task":
             from soota.tasks.state import load_spec
 
-            spec = load_spec(settings, values["job_id"])
+            spec = load_spec(settings, bound_id)
             if all(item.kind in {"file", "bundle"} for item in spec.inputs):
                 return False
     if fn.__name__ in {"discover", "run_site"} and not settings.opencli_mcp.enabled:

@@ -31,7 +31,7 @@ flowchart TD
     H -.逐项进度合并与同目录串行.-> S[任务状态与内容包锁]
     C -.排序和收费前检查.-> P[有时效报价：任务内共享与过期刷新]
     C -.计费请求前持久预留.-> Q[全批 USD 预算、结算差异暂停与 Weir 月度/任务 credits]
-    C --> D[内容处理：含 Weir 正文绑定与目标 ID 校验]
+    C --> D[内容处理：含 Weir 绑定、微信 DOM 解析与目标 ID 校验]
     D --> E[校验与保存 context、媒体及所选产物]
     E -.请求分析、笔记、文章或大纲.-> F[外部 Agent 写作]
     F --> L[LoreLab content：校验提交、渲染与恢复]
@@ -43,13 +43,14 @@ flowchart TD
 
 | 黑盒 | 职责 | 代码入口 |
 | --- | --- | --- |
+| 微信匿名采集 | 单篇 HTTP、删除/验证状态识别与公开合集分页；复用共享有界 HTTP，不带个人 Cookie | `providers/wechat.py`、`content/wechat.py`、`wechat.py` |
 | 规划与预设 | 结构匹配、比较方案、确认后保存、执行前核价；不采集、不后台轮询、不扩大费用权限 | `planning/`、`tasks/policy.py` |
 | 输入与目标 | 识别链接、本地文件、清单与旧内容包，声明必需和可选产物；规划与执行共用依赖判断 | `tasks/entry.py`、`tasks/inputs.py`、`tasks/models.py`、`tasks/dependencies.py` |
 | 采集任务编排 | 有序枚举与去重；有界条目并行，同目录串行；传播上下文，锁内合并进度，复用产物，中断收尾；全批请求前预留 | `tasks/runner.py`、`tasks/scheduler.py`、`tasks/enumeration.py`、`tasks/state.py`、`storage/task_budget.py`、`storage/credit_budget.py` |
 | 报价与排序 | 按能力核对全链价格；共享时效缓存，在线执行过期刷新，离线仅估价 | `providers/quotes.py`、`providers/priority.py` |
 | 内容获取 | 按能力选择 Provider，取得原生数据、正文、字幕或媒体；保留真实获取状态 | `providers/`、`content/native.py`、`tasks/acquire.py` |
 | 内容处理 | 字幕格式统一、本地转写、正文结构转换及媒体处理；默认不做语义改写 | `transcripts/`、`content/`、`media/` |
-| 校验与保存产物 | 校验文件与媒体，登记 v2 产物、来源及校验值，保护既有源文和文章 | `media/probe.py`、`artifacts/bundle.py` |
+| 校验与保存产物 | 校验文件与媒体，登记 v2/v3 产物、来源及校验值，保护既有源文和文章 | `media/probe.py`、`artifacts/bundle.py` |
 | 外部语义处理 | Agent 阅读与写作；LoreLab 校验正文指纹、task/item 身份与证据，保存语义产物 | `lorelab content ingest/resume/render`，LoreLab Skill |
 | 外部整包导出 | 写入指定目录，维持相对附件链接并检查人工修改冲突 | `lorelab content export` |
 
@@ -244,7 +245,7 @@ uv run soota runtime rollback --json
 | `tasks/` | 七类采集目标、步骤组合、集合展开、逐项检查点及采集恢复 |
 | `content/` | 本机能力发现、显式原生读取及受控结果转换 |
 | `media/` | 本地或远程媒体获取、合并、抽音轨及实际文件验证 |
-| `artifacts/` | v1/v2 原文内容包、来源证据与产物哈希；保留旧分析字段的数据兼容 |
+| `artifacts/` | v1/v2 兼容与显式 v3 双根原文内容包、来源证据与产物哈希；保留旧分析字段的数据兼容 |
 | `storage/credit_budget.py` | Weir 跨任务月度／任务 credits 预留、核账和未决请求保留 |
 | `storage/task_budget.py` | 全批计费请求的原子预留和恢复预算 |
 | `providers/router.py` | 能力选择、元数据兜底和请求预算 |
@@ -267,6 +268,7 @@ uv run soota runtime rollback --json
 | `providers/opencli_runtime.py` | 外部/受管运行时选择、完整性校验、安装与回滚 |
 | `providers/opencli_patches.py` | 对受管运行时应用已匹配的媒体导航、YouTube 字幕和小红书搜索筛选修复 |
 | `counterpart.py` | 同名频道发现、身份与同一期视频验证 |
+| `accounts.py` | 复用 yt-dlp/OpenCLI 有界读取账号资料、稳定 ID 和公开链接；关联判定与成本小样归 LoreLab tracking |
 | `transcripts/promotions.py` | 社区及人工区间过滤，保留原片段编号与时间 |
 | `runtime_cli.py` | 对外暴露运行时管理命令 |
 | `updates.py`、`updates_cli.py` | 仓库更新查询与包更新 CLI 入口 |

@@ -14,6 +14,15 @@ Apache-2.0 grants are not retroactively withdrawn. The unchanged former top-leve
 text is retained as [historical Apache-2.0 evidence](LICENSES/soota-historical-Apache-2.0-LICENSE);
 it is not an alternative license grant for newly authored GPL-covered changes.
 
+## WeChat HTML conversion dependencies
+
+The WeChat DOM conversion additionally uses separately installed Beautiful Soup
+4.15.0 and markdownify 1.2.3. Both use the MIT license; their unmodified installed
+license texts are retained as [Beautiful Soup](LICENSES/beautifulsoup4-4.15.0-LICENSE)
+and [markdownify](LICENSES/markdownify-1.2.3-LICENSE). No library source is vendored.
+Source references: <https://www.crummy.com/software/BeautifulSoup/> and
+<https://github.com/matthewwithanm/python-markdownify>.
+
 ## TikHub Python SDK 2.1.2
 
 - Integration: pinned Python dependency (`tikhub==2.1.2`); no upstream files modified.

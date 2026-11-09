@@ -91,7 +91,7 @@ def expand_inputs(settings: SootaSettings, spec: TaskSpec, job: TaskJob) -> list
     for index, seed in enumerate(spec.inputs):
         key = str(index)
         source = source_for(seed)
-        collection = seed.kind == "collection" or source.kind in {"channel", "user", "playlist"}
+        collection = seed.kind == "collection" or source.kind in {"channel", "user", "playlist", "album"}
         if seed.kind == "file" and Path(seed.value).name == "catalog.json":
             expanded.extend(parse_inputs(None, Path(seed.value)))
             continue

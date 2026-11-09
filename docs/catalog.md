@@ -2,7 +2,7 @@
 
 X 用户主页当前使用 OpenCLI 最近快照（最多 200 条）；opencli-mcp 默认停用；与下文 TikHub 分页语义不同。`--max-cost 0 --incremental` 可保存并去重，`completeness=unknown`，不能 resume 或证明历史全量。详见 [终端教程](terminal-tutorial.md) 与 [Provider 边界](providers.md)。
 
-目录快照用于收集 YouTube 频道或 Bilibili UP 主的视频链接与已有元数据。目录命令不执行分类或批量字幕/ASR，也不支持 YouTube 播放列表。
+目录快照收集视频、帖子或微信文章链接与已有元数据。微信合集与全号目录见下文。目录命令不执行分类或批量字幕/ASR，也不支持 YouTube 播放列表。
 
 ## 命令与范围
 
@@ -67,3 +67,21 @@ YouTube `@handle`、`/c/name`、`/user/name` 首次使用时需解析频道 ID�
 `tests/unit/test_catalog.py` 覆盖预算、页内剩余条目、错误、恢复、增量与锁；`tests/contract/test_catalog_fixtures.py` 校验按官方契约构造的脱敏样例；`tests/contract/test_catalog_cli.py` 使用真实 TikHub SDK 与 `httpx.MockTransport` 验证 CLI、请求参数、HTTP 错误和关闭自动重试的效果。
 
 这些测试不等于真实目录验收。真实目录请求需要授权的来源和费用设置；模拟测试不能证明实际分页、余额扣费及输出均可用。
+
+## 微信公众号
+
+公开合集使用匿名 HTTP，不需要 Cookie、登录或浏览器窗口。全号历史使用已登记的 TikHub `wechat_mp.fetch_account_articles`；两种目录都复用标准 `catalog.json`、分页限制、增量检查点与恢复机制。
+
+```sh
+soota catalog 'https://mp.weixin.qq.com/mp/appmsgalbum?__biz=BIZ&album_id=ALBUM_ID' --max-cost 0 --max-items 10000 --max-pages 1000 --json
+soota catalog gh_example --provider tikhub --max-cost 0.10 --max-items 1000 --max-pages 10 --json
+soota jobs resume JOB_ID --max-items 10000 --max-pages 1000 --json
+```
+
+合集请求 `action=getalbum&f=json`，以最后一项的 `msgid/itemidx` 作为下一页 `begin_msgid/begin_itemidx`。`continue_flag=0` 才表示目录到末页；空响应、重复游标、业务错误和验证页都不能冒充完成。条目 `extras` 保留 `pos_num/msgid/itemidx/create_time/album_id/__biz/sn`，有声明总数时输出 `total_items`。完整合集不代表全号历史完整。
+
+全号输入接受 `gh_xxx`，规范来源为 `https://mp.weixin.qq.com/mp/profile_ext?username=gh_xxx`（账号定位标识，不承诺该地址有可匿名读取的主页）。使用 POST body 的 `username/page_size/offset/raw=false`，以返回的 `next_offset` 续页、`is_end` 判定结束，保留 `extras.username`。`page_size` 不保证上游固定返回条数，不用少于一页来推断结束。付款确认、报价时效和请求前持久预留继续生效；`--max-cost 0` 不发送计费请求。当前全号标准目录只绑定 TikHub，不自动切换中转来源。
+
+文章稳定身份按 `__biz + mid + idx` 去重，保留 `sn` 访问参数；分享场景参数或 sn 的变化不制造另一篇文章。到达 `max_items/max_pages` 时仍是暂停状态，必须续跑至 `stop_reason=end` 才能说该目录已完整枚举。编号连续性、跨快照对账和文件/删除回执由 LoreLab tracking 处理，Soota 不维护个人名单。
+
+请求参数与全号响应契约依据 [TikHub SDK 的 OpenAPI](https://github.com/TikHub/TikHub-API-Python-SDK/blob/main/spec/openapi.json)；公开合集可参照 [RSSHub 的公开合集实现](https://github.com/DIYgod/RSSHub/blob/master/lib/routes/wechat/msgalbum.ts)。自动化测试使用合成页面和模拟响应，不代表已完成真实微信和付费接口验收。

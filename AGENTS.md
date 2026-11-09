@@ -41,8 +41,12 @@
 
 ## 与 LoreLab 的职责边界
 
+- 微信 `wechat.py` 统一公开 URL、稳定文章身份与目录元数据；`providers/wechat.py` 获取匿名 HTTP 正文和公开合集，`content/wechat.py` 确定性解析 DOM、代码块与删除/验证状态；全号目录绑定 `providers/tikhub/catalog.py` 的已登记 POST 接口。目录恢复与费用仍归 `catalog.py` / `tasks/`，个人账号、wx 导入、连续性核对与文件/删除回执归 LoreLab tracking。
+
+- `accounts.py` 复用 yt-dlp/OpenCLI 有界读取公开账号资料、稳定身份与链接，不推断同一人；跨平台证据判定、样本比较和个人关注状态归 LoreLab tracking。主页最多一条平铺目录项，指定视频元数据在现有 Provider 内采集，不为账号核验重写网站 API。
+
 - 组件内部平台适配归 `platform_support.py`、`storage/locking.py`、`providers/process_pipes.py` 与 `providers/windows_process.py`。锁、进程树取消及资源上限不能降级为空操作；平台缺少硬限额时派发前明确失败。对外边界维护在 `docs/providers.md` 的 Windows 运行说明。
-- Soota 负责正文与媒体采集、解析、context、预算、缓存和采集任务恢复。新任务只接受 `video/audio/transcript/context/markdown/images/data`；`note/article/analysis/outline` 与 `--destination/--vault/--subdir` 的实现全归 LoreLab content。`--output` 仍指定采集包位置。
+- Soota 负责正文与媒体采集、解析、context、预算、缓存和采集任务恢复。新任务只接受 `video/audio/transcript/context/markdown/images/data`；`note/article/analysis/outline` 与 `--destination/--vault/--subdir` 的实现全归 LoreLab content。`--output` 默认指定采集包位置；显式 `storage.control_dir` 时只指定原件根，新包采用 v3。manifest/context/分析归控制包，逐产物通过 `artifact_path` 定位。新任务冻结两根，旧任务按原 spec_path 与预算恢复；`storage.jobs_dir` 不改变全局账本和凭据。
 - 单来源分析、笔记、文章、大纲、分类审阅和整包导出，以及知识学习交付与授权清理由 LoreLab 及其 Skill 维护；不在 Soota 重建工作流、分析校验器或复制写作提示词。
 - 旧 `soota ingest` 带语义目标/导出参数、`soota jobs resume` 旧语义或交付任务、`soota render` 仅作隐藏兼容桥，动态调用同一 Python 环境的 LoreLab content，不从 PATH 另选产品；旧 `soota knowledge/study` 通过 `workflow_compat.py` 转发。无 LoreLab 时明确报需要安装，在修改任务、预算或产物前停止；受管安装缺失时不误用其他产品版本。独立采集和原文包不依赖 LoreLab，组件源码与 Skill 引用须自含。
 - 旧 `TaskSpec` 的语义词/目标字段与 `AnalysisManifest` 状态只保留数据兼容，没有语义生成或导出实现。`Analysis`、`KeyPoint`、`Chapter` 及全部写作渲染实现归 LoreLab `src/lorelab/content/`，分析 schema 归 LoreLab 主仓 `schemas/analysis.v1.json`，不在独立 Soota 复制。已有采集任务仍用 `soota jobs`；旧语义任务由 LoreLab content 按原 task/item 身份、source 证据、原路径、预算与产物恢复；已有知识任务通过 LoreLab 按原绝对路径恢复，冻结来源、指纹和清理条件不变。`lorehub` 命令继续保持移除，历史配置和环境变量由 LoreLab 兼容读取。

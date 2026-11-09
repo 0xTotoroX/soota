@@ -1,3 +1,9 @@
+"""[INPUT]: 公开来源 URL 或公众号 username。
+[OUTPUT]: 规范 SourceRef。
+[POS]: 来源身份路由，微信细节委派 wechat.py。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import re
@@ -51,10 +57,19 @@ def _clean_url(url: str) -> str:
 
 
 def recognize(url: str) -> SourceRef:
+    if url.strip().startswith("gh_") or urlparse(url).hostname == "mp.weixin.qq.com":
+        from soota.wechat import recognize as recognize_wechat
+
+        return recognize_wechat(url.strip())
     cleaned = _clean_url(url)
     parsed = urlparse(cleaned)
     host = _host(parsed.netloc)
     path = parsed.path or "/"
+
+    if host == "mp.weixin.qq.com":
+        from soota.wechat import recognize as recognize_wechat
+
+        return recognize_wechat(cleaned)
 
     if host in _YT_HOSTS or host.endswith(".youtube.com"):
         return _youtube(cleaned, parsed, host, path)

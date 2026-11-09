@@ -1,3 +1,9 @@
+"""[INPUT]: 来源、元数据、请求账本与目录检查点。
+[OUTPUT]: 共享模型及含 total_items/http 来源的 CatalogJob。
+[POS]: 采集数据契约；旧目录和任务缺省保持兼容。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -221,7 +227,7 @@ class CatalogJob(BaseModel):
     status: Literal["running", "paused", "completed", "failed"] = "running"
     source: SourceRef
     # Defaults preserve persisted v1 TikHub jobs and their cursor semantics.
-    provider: Literal["tikhub", "monid", "treg", "opencli", "opencli-mcp"] = "tikhub"
+    provider: Literal["tikhub", "monid", "treg", "opencli", "opencli-mcp", "http"] = "tikhub"
     profile: str | None = None
     completeness: Literal["unknown", "paginated"] = "paginated"
     warnings: list[str] = Field(default_factory=list)
@@ -237,6 +243,7 @@ class CatalogJob(BaseModel):
     items: list[MediaItem] = Field(default_factory=list)
     title: str | None = None
     cursor: str | None = None
+    total_items: int | None = None
     visited_cursors: list[str | None] = Field(default_factory=list)
     pending_page: CatalogPage | None = None
     exhausted: bool = False

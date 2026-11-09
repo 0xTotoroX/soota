@@ -1,6 +1,6 @@
 """
-[INPUT]: User config, provider overrides and environment values.
-[OUTPUT]: Validated settings, quote TTL and optional Monid/treg/Weir providers.
+[INPUT]: User config or read-only candidate documents, provider overrides and environment values.
+[OUTPUT]: Validated settings, explicit preference overlays and opt-in storage roots; previews never write files.
 [POS]: Shared configuration models and loading; credentials remain external.
 [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
 """
@@ -135,12 +135,19 @@ class PaymentConfig(BaseModel):
     min_balance_usd: FiniteFloat | None = Field(default=None, ge=0)
 
 
+class StorageConfig(BaseModel):
+    control_dir: Path | None = None
+    jobs_dir: Path | None = None
+
+
 class SootaSettings(BaseModel):
     output_dir: Path = Field(default_factory=lambda: Path.home() / "Documents" / "Soota")
     default_language: str = "zh"
     config_dir: Path
     cache_dir: Path
     data_dir: Path
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+    preferences_file: Path | None = None
     tikhub: TikHubConfig = Field(default_factory=TikHubConfig)
     monid: MonidConfig = Field(default_factory=MonidConfig)
     treg: TregConfig = Field(default_factory=TregConfig)
@@ -161,7 +168,11 @@ class SootaSettings(BaseModel):
 
     @property
     def jobs_dir(self) -> Path:
-        return self.data_dir / "jobs"
+        return self.storage.jobs_dir if self.storage.jobs_dir is not None else self.data_dir / "jobs"
+
+    @property
+    def preferences_path(self) -> Path | None:
+        return self.preferences_file
 
     @property
     def ledger_path(self) -> Path:
@@ -181,12 +192,85 @@ def default_dirs() -> tuple[Path, Path, Path]:
     return config_dir, cache_dir, data_dir
 
 
-def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
+def _merge_explicit(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in overrides.items():
+        previous = result.get(key)
+        result[key] = (
+            _merge_explicit(previous, value) if isinstance(previous, dict) and isinstance(value, dict) else value
+        )
+    return result
+
+
+def _preferences(
+    data: dict[str, Any], config_dir: Path, document: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], Path | None]:
+    """只读取偏好中显式填写的键；凭据和全局状态目录仍由原配置负责。"""
+    raw = os.environ.get("SOOTA_PREFERENCES_FILE") or (data.get("soota") or {}).get("preferences_file")
+    if not raw:
+        return {}, None
+    path = Path(raw).expanduser()
+    path = (config_dir / path if not path.is_absolute() else path).resolve()
+    if document is None and not path.exists():
+        return {}, path
+    try:
+        preferences = document if document is not None else tomllib.loads(path.read_text(encoding="utf-8"))
+        allowed = {
+            "soota": {"output_dir", "default_language"},
+            "storage": set(StorageConfig.model_fields),
+            "asr": set(AsrConfig.model_fields),
+            "updates": set(AutoUpdateConfig.model_fields),
+            "routing": set(RoutingConfig.model_fields),
+            "content_selection": set(ContentSelectionConfig.model_fields),
+            "audio": set(AudioConfig.model_fields),
+            "opencli": set(OpenCLIConfig.model_fields),
+            "opencli_mcp": set(OpenCLIMCPConfig.model_fields) - {"runtime_binary"},
+            "tikhub": set(TikHubConfig.model_fields) - {"runtime_python"},
+            "monid": set(MonidConfig.model_fields),
+            "treg": set(TregConfig.model_fields),
+            "weir": set(WeirConfig.model_fields),
+        }
+        overlay = {}
+        for section, keys in allowed.items():
+            if section in preferences:
+                values = preferences[section]
+                if not isinstance(values, dict):
+                    raise ValueError("偏好配置节必须是表")
+                overlay[section] = {key: value for key, value in values.items() if key in keys}
+        for section, key in (("soota", "output_dir"), ("storage", "control_dir"), ("storage", "jobs_dir")):
+            if key in overlay.get(section, {}):
+                value = Path(overlay[section][key]).expanduser()
+                overlay[section][key] = str((path.parent / value if not value.is_absolute() else value).resolve())
+        return overlay, path
+    except (OSError, TypeError, ValueError) as exc:
+        raise InputError("采集偏好 TOML 无效，未执行任何请求。") from exc
+
+
+def load_settings(
+    *,
+    ignore_payment: bool = False,
+    config_document: dict[str, Any] | None = None,
+    preferences_document: dict[str, Any] | None = None,
+    providers_document: dict[str, Any] | None = None,
+    payment_document: dict[str, Any] | None = None,
+) -> SootaSettings:
+    """复用同一加载规则预检候选文档；None 读取原文件，空字典代表显式空文档。
+
+    偏好路径仍由全局文档与环境选择，相对路径仍以该文件的位置解析；不改环境或输入文档。
+    """
     config_dir, cache_dir, data_dir = default_dirs()
     path = config_dir / "config.toml"
-    data: dict[str, Any] = {}
-    if path.is_file():
+    data: dict[str, Any] = dict(config_document) if config_document is not None else {}
+    if config_document is None and path.is_file():
         data = tomllib.loads(path.read_text(encoding="utf-8"))
+    preferences, preferences_path = _preferences(data, config_dir, preferences_document)
+    if "soota" in data or "soota" in preferences:
+        # 添加偏好指针不应遮掉旧式根层显式值；节内值和个人覆盖仍优先。
+        data["soota"] = {
+            **{key: data[key] for key in ("output_dir", "default_language") if key in data},
+            **(data.get("soota") or {}),
+        }
+    data = _merge_explicit(data, preferences)
     soota = data.get("soota", data)
     payment = dict((data.get("tikhub") or {}).get("billing") or {})
     payment.pop("default_provider", None)
@@ -194,8 +278,9 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
     try:
         if ignore_payment:
             payment = {}
-        elif policy_path.is_file():
-            saved = json.loads(policy_path.read_text(encoding="utf-8"))
+        elif payment_document is not None or policy_path.is_file():
+            saved = (dict(payment_document) if payment_document is not None
+                     else json.loads(policy_path.read_text(encoding="utf-8")))
             if not isinstance(saved, dict):
                 raise ValueError("expected policy object")
             # Old policy set coupled auto billing to a TikHub-first default.
@@ -224,14 +309,22 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
         )
         routing_data = dict(data.get("routing") or {})
         provider_path = config_dir / "providers.json"
-        provider_data = json.loads(provider_path.read_text(encoding="utf-8")) if provider_path.is_file() else {}
+        provider_data = (providers_document if providers_document is not None
+                         else json.loads(provider_path.read_text(encoding="utf-8")) if provider_path.is_file() else {})
         if not isinstance(provider_data, dict):
             raise ValueError("providers.json 必须为对象")
         routing_data.update(provider_data.get("routing", {}))
+        routing_data = _merge_explicit(routing_data, preferences.get("routing", {}))
         routing_config = RoutingConfig.model_validate(routing_data)
-        monid_config = MonidConfig.model_validate({**(data.get("monid") or {}), **provider_data.get("monid", {})})
-        treg_config = TregConfig.model_validate({**(data.get("treg") or {}), **provider_data.get("treg", {})})
-        weir_config = WeirConfig.model_validate({**(data.get("weir") or {}), **provider_data.get("weir", {})})
+        monid_config = MonidConfig.model_validate(
+            {**(data.get("monid") or {}), **provider_data.get("monid", {}), **preferences.get("monid", {})}
+        )
+        treg_config = TregConfig.model_validate(
+            {**(data.get("treg") or {}), **provider_data.get("treg", {}), **preferences.get("treg", {})}
+        )
+        weir_config = WeirConfig.model_validate(
+            {**(data.get("weir") or {}), **provider_data.get("weir", {}), **preferences.get("weir", {})}
+        )
         audio_config = AudioConfig.model_validate(data.get("audio") or {})
         mcp_config = OpenCLIMCPConfig.model_validate(
             {
@@ -246,12 +339,20 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
     except (TypeError, ValueError) as exc:
         raise InputError("来源或 opencli-mcp 配置无效，未执行任何请求。") from exc
     output = _env_path("SOOTA_OUTPUT_DIR")
+    storage_data = dict(data.get("storage") or {})
+    for key, variable in (("control_dir", "SOOTA_CONTROL_DIR"), ("jobs_dir", "SOOTA_JOBS_DIR")):
+        value = _env_path(variable) or storage_data.get(key)
+        if value is not None:
+            value = Path(value).expanduser()
+            storage_data[key] = (config_dir / value if not value.is_absolute() else value).resolve()
     settings = SootaSettings(
         output_dir=output or Path(soota.get("output_dir", Path.home() / "Documents" / "Soota")).expanduser(),
         default_language=str(soota.get("default_language", "zh")),
         config_dir=config_dir,
         cache_dir=cache_dir,
         data_dir=data_dir,
+        storage=StorageConfig.model_validate(storage_data),
+        preferences_file=preferences_path,
         payment=payment_config,
         updates=updates_config,
         routing=routing_config,
@@ -294,3 +395,5 @@ def load_settings(*, ignore_payment: bool = False) -> SootaSettings:
 def ensure_dirs(settings: SootaSettings) -> None:
     for path in (settings.config_dir, settings.cache_dir, settings.data_dir, settings.jobs_dir, settings.output_dir):
         path.mkdir(parents=True, exist_ok=True)
+    if settings.storage.control_dir is not None:
+        settings.storage.control_dir.mkdir(parents=True, exist_ok=True)

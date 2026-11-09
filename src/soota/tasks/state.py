@@ -24,7 +24,17 @@ from soota.tasks.models import InputSpec, TaskItem, TaskJob, TaskSpec
 
 
 def task_folder(settings: SootaSettings, job_id: str) -> Path:
-    JobStore(settings.jobs_dir)._path(job_id)  # Validate before forming a path.
+    store = JobStore(settings.jobs_dir)
+    record_path = store._path(job_id)
+    if record_path.is_file():
+        spec_path = store.get(job_id).get("spec_path")
+        if spec_path:
+            path = Path(spec_path)
+            if not path.is_absolute() or path.name != "request.json":
+                raise InputError("任务请求路径无效，未重新定位冻结任务。")
+            return path.parent
+    if settings.storage.jobs_dir is not None:
+        return settings.jobs_dir / job_id
     return settings.data_dir / "tasks" / job_id
 
 

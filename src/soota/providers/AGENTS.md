@@ -27,12 +27,13 @@
 - `soota.py`：旧名称对 yt-dlp Provider 的兼容导入。
 - `tikhub_worker.py`：隔离环境中的 TikHub SDK 桥。
 - `weir.py`：免费余额检查、跨 Key 轮询／401 跳过、HTTP 获取与 credits 回执结算。
+- `wechat.py`：匿名 HTTP 微信单篇和公开合集获取；标准桌面请求头、状态页错误、合集游标与目录元数据。
 - `weir_keys.py`：私有主用／命名备用凭据、启停、环境覆盖、持久轮询游标、脱敏清单与绑定当前 Key 的赠送额度确认。
 - `windows_process.py`：Windows 进程树与管道控制。
-- `ytdlp.py`：yt-dlp 元数据、字幕和媒体获取。
+- `ytdlp.py`：yt-dlp 元数据、字幕和媒体获取；保留公开作者身份、描述和发布日期供账号证据与样本比较使用。
 - `monid/`：Monid 获取和费用策略，见其局部地图。
 - `treg/`：固定读取映射、报价与回执、字幕获取，见其局部地图。
-- `tikhub/`：TikHub 注册表、原生接口与平台适配。
+- `tikhub/`：TikHub 注册表、原生接口与平台适配；catalog 的微信全号绑定使用注册的 POST body 和 offset/is_end，沿用原费用门禁。
 
 Provider 获取原始数据；Weir 正文绑定和确定性转换在 `content/weir.py`，跨 Key／任务的 UTC 月度账本在 `storage/credit_budget.py`。主源同步要求见父级约定。
 

@@ -31,6 +31,7 @@ from soota.providers.router import catalog_provider, validate_policy
 from soota.providers.tikhub.catalog import YOUTUBE_CHANNEL_ID, catalog_endpoint, is_channel_id
 from soota.providers.tikhub.client import TikHubProvider, load_price_snapshot
 from soota.providers.treg.provider import TregProvider
+from soota.providers.wechat import WechatAlbumProvider
 from soota.render.catalog import write_catalog
 from soota.routing import recognize
 from soota.secrets import redact_any
@@ -88,6 +89,27 @@ def estimate_catalog(
     selected_provider(settings, selected)
     if fallback:
         raise InputError("当前目录来源没有已验证的替代分页契约；不能启用目录 fallback。")
+    if selected == "http":
+        return CommandResult(
+            ok=True,
+            status="success",
+            code="ok",
+            exit_code=0,
+            message="微信公开合集预估完成；未联网、未创建任务。",
+            data={
+                "mode": "catalog",
+                "source": source.model_dump(),
+                "provider": "http",
+                "max_items": max_items,
+                "max_pages": max_pages,
+                "max_cost": max_cost,
+                "request_limit": max_pages,
+                "estimated_cost_usd": 0,
+                "incremental": incremental,
+                "completeness": "paginated",
+                "resumable": True,
+            },
+        )
     if selected in {"opencli", "opencli-mcp"}:
         if max_items > (100 if selected == "opencli-mcp" else 200):
             raise InputError("免费来源最近快照超过当前条数上限；更多历史需要独立搜索审计。")
@@ -289,8 +311,10 @@ def _known_ids(job: CatalogJob, store: JobStore) -> list[str]:
 
 def _provider(
     settings: SootaSettings, job: CatalogJob, store: JobStore, requester: Callable[..., Any] | None
-) -> TikHubProvider | OpenCLIProvider | OpenCLIMCPProvider:
+) -> TikHubProvider | OpenCLIProvider | OpenCLIMCPProvider | WechatAlbumProvider:
     selected_provider(settings, job.provider)
+    if job.provider == "http":
+        return WechatAlbumProvider()
     if job.provider == "opencli":
         bound = settings.model_copy(update={"opencli": settings.opencli.model_copy(update={"profile": job.profile})})
         return OpenCLIProvider(bound)
@@ -364,7 +388,7 @@ def _execute(
         try:
             _collect(job, store, provider)
         finally:
-            if isinstance(provider, (OpenCLIProvider, OpenCLIMCPProvider)):
+            if isinstance(provider, (OpenCLIProvider, OpenCLIMCPProvider, WechatAlbumProvider)):
                 job.requests.extend(provider.records)
     except KeyboardInterrupt:
         job.status, job.stop_reason = "paused", "interrupted"
@@ -406,7 +430,11 @@ def _execute(
     return _result(job, folder, previous_requests, previous_items)
 
 
-def _collect(job: CatalogJob, store: JobStore, provider: TikHubProvider | OpenCLIProvider | OpenCLIMCPProvider) -> None:
+def _collect(
+    job: CatalogJob,
+    store: JobStore,
+    provider: TikHubProvider | OpenCLIProvider | OpenCLIMCPProvider | WechatAlbumProvider,
+) -> None:
     known = set(job.known_ids)
     collected = {item.source.cache_identity for item in job.items}
     while not job.exhausted:
@@ -428,6 +456,8 @@ def _collect(job: CatalogJob, store: JobStore, provider: TikHubProvider | OpenCL
             job.pages_fetched += 1
             job.visited_cursors.append(job.cursor)
             job.title = page.title or job.title
+            if page.total_items is not None:
+                job.total_items = page.total_items
             # Save the entire page before applying item limits. Resume consumes its remainder for free.
             _save(job, store)
             if (
@@ -483,6 +513,7 @@ def _result(job: CatalogJob, folder: Path | None, previous_requests: int, previo
         "job_status": job.status,
         "stop_reason": job.stop_reason,
         "item_count": len(job.items),
+        "total_items": job.total_items,
         "items_added_this_run": len(job.items) - previous_items,
         "pages_fetched": job.pages_fetched,
         "pending_items": len(job.pending_page.items) if job.pending_page else 0,

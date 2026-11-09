@@ -1,3 +1,9 @@
+"""[INPUT]: 当前 jobs 配置、原任务 ID 或绝对记录路径。
+[OUTPUT]: JobStore、绑定原根的恢复 settings；不重定位全局账本或凭据。
+[POS]: 任务记录和执行锁；冻结请求目录由 tasks/state 读取 spec_path。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,10 +15,44 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from soota.config import SootaSettings
 from soota.errors import InputError, SourceError, StorageError
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
 from soota.storage.locking import lock_file, unlock_file
+
+
+def _job_path(root: Path, job_id: str) -> Path:
+    if not re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{8}", job_id):
+        raise InputError("任务 ID 格式无效。", hint="用 soota jobs list 查看任务 ID。")
+    return root / f"{job_id}.json"
+
+
+def bind_job(settings: SootaSettings, job_id: str) -> tuple[SootaSettings, str]:
+    """将恢复绑定到原任务记录；不移动全局账本、凭据或冻结请求。"""
+    candidate = Path(job_id).expanduser()
+    if candidate.is_absolute():
+        if candidate.name == "request.json" or candidate.is_dir():
+            folder = candidate.parent if candidate.name == "request.json" else candidate
+            candidates = [folder.parent / f"{folder.name}.json", folder.parent.parent / "jobs" / f"{folder.name}.json"]
+            candidate = next((path for path in candidates if path.is_file()), candidates[0])
+        if not candidate.is_file() or candidate.suffix != ".json":
+            raise InputError("找不到绝对路径对应的任务记录。")
+        job_id = candidate.stem
+    else:
+        candidate = _job_path(settings.jobs_dir, job_id)
+        legacy = settings.data_dir / "jobs" / f"{job_id}.json"
+        if not candidate.is_file() and legacy.is_file():
+            candidate = legacy
+    if not candidate.is_file():
+        raise InputError("找不到该任务。", hint="使用原任务记录的绝对路径恢复。")
+    record = JobStore(candidate.parent).get(job_id)
+    old_root = settings.data_dir / "jobs"
+    old_spec = settings.data_dir / "tasks" / job_id / "request.json"
+    legacy_layout = candidate.parent == old_root and record.get("spec_path") in {None, "", str(old_spec)}
+    storage = settings.storage.model_copy(update={"jobs_dir": None if legacy_layout else candidate.parent})
+    bound = settings.model_copy(update={"storage": storage})
+    return bound, job_id
 
 
 class JobStore:
@@ -33,9 +73,7 @@ class JobStore:
         return record
 
     def _path(self, job_id: str) -> Path:
-        if not re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{8}", job_id):
-            raise InputError("任务 ID 格式无效。", hint="用 soota jobs list 查看任务 ID。")
-        return self.root / f"{job_id}.json"
+        return _job_path(self.root, job_id)
 
     def get(self, job_id: str) -> dict[str, Any]:
         path = self._path(job_id)

@@ -1,3 +1,9 @@
+"""[INPUT]: 采集和处理层的确定失败。
+[OUTPUT]: 稳定错误码、退出码及结构化证据。
+[POS]: 共享错误边界；删除与环境验证分别编码。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 
@@ -41,6 +47,14 @@ class AuthBudgetError(SootaError):
 class SourceError(SootaError):
     code = "source"
     exit_code = 5
+
+
+class RemoteDeleted(SourceError):
+    code = "remote_deleted"
+
+
+class VerificationRequired(SourceError):
+    code = "verification_required"
 
 
 class TranscriptError(SootaError):

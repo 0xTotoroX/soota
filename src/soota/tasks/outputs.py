@@ -18,7 +18,7 @@ from soota.artifacts.bundle import (
     write_artifact,
     write_bundle,
 )
-from soota.artifacts.models import BundleV2
+from soota.artifacts.models import Bundle, BundleV3
 from soota.billing import selected_provider
 from soota.config import SootaSettings
 from soota.errors import InputError, SootaError, SourceError
@@ -28,7 +28,7 @@ from soota.tasks.acquire import public_text
 from soota.tasks.models import InputSpec, TaskItem, TaskSpec
 
 
-def _export_subtitles(folder: Path, bundle: BundleV2, spec: TaskSpec) -> None:
+def _export_subtitles(folder: Path, bundle: Bundle, spec: TaskSpec) -> None:
     document = load_transcript(folder, bundle)
     if document is None or not document.segments:
         raise SourceError("没有可导出的字幕。")
@@ -72,14 +72,18 @@ def _export_subtitles(folder: Path, bundle: BundleV2, spec: TaskSpec) -> None:
 
 
 def _images(
-    settings: SootaSettings, spec: TaskSpec, seed: InputSpec, work: Path, folder: Path, bundle: BundleV2, row: TaskItem
+    settings: SootaSettings, spec: TaskSpec, seed: InputSpec, work: Path, folder: Path, bundle: Bundle, row: TaskItem
 ) -> None:
     if bundle.content is None:
         raise SourceError("没有可供获取图片的正文。")
     references = work / "references.json"
     private = json.loads(references.read_text(encoding="utf-8")) if references.is_file() else {}
     raw_body = private.get("body", bundle.content.body_md)
-    base = private.get("base", str(Path(seed.value).parent) if seed.kind == "file" else seed.value)
+    raw_root = bundle.raw_root if isinstance(bundle, BundleV3) else folder
+    default_base = (
+        str(Path(seed.value).parent) if seed.kind == "file" else str(raw_root) if seed.kind == "bundle" else seed.value
+    )
+    base = private.get("base", default_base)
     matches = list(re.finditer(r"!\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)", raw_body))
     urls = list(dict.fromkeys(match[1] for match in matches))
     if not urls:
@@ -94,13 +98,20 @@ def _images(
                     raise InputError("local 模式不能获取远程图片。")
                 selected_provider(settings, "http")
                 absolute = urljoin(base, url)
-                asset = service.from_descriptor(MediaDescriptor(url=absolute, source_provider="http"), kind="image")
+                headers = {}
+                if bundle.source.platform == "wechat_mp":
+                    from soota.wechat import USER_AGENT
+
+                    headers = {"Referer": bundle.source.canonical_url, "User-Agent": USER_AGENT}
+                asset = service.from_descriptor(
+                    MediaDescriptor(url=absolute, source_provider="http", headers=headers), kind="image"
+                )
             else:
                 if urlsplit(url).scheme:
                     raise InputError("不支持正文中的本地文件 URL 协议。")
                 original = (Path(base) / url).resolve()
                 if seed.kind != "file" and not original.is_relative_to(
-                    (folder if seed.kind == "bundle" else work).resolve()
+                    (raw_root if seed.kind == "bundle" else work).resolve()
                 ):
                     raise InputError("工具正文引用了任务目录外的本地附件。")
                 asset = service.from_file(original, kind="image")
@@ -129,6 +140,9 @@ def _images(
         source=bundle.source,
         title=bundle.metadata.get("title"),
         creator=bundle.metadata.get("creator"),
+        published_at=bundle.metadata.get("published_at"),
+        duration_seconds=bundle.metadata.get("duration_seconds"),
+        language=bundle.metadata.get("language"),
         provenance=bundle.metadata.get("provenance", {}),
     )
     updated = write_bundle(folder, item, content=content, force=spec.force)

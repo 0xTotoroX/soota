@@ -1,3 +1,9 @@
+"""[INPUT]: HTTP 地址、请求头、时间和字节上限。
+[OUTPUT]: 受控流式响应及媒体下载。
+[POS]: 共享网络边界；微信可匿名读取错误状态正文，不改变媒体默认校验。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import json
@@ -43,6 +49,8 @@ def http_response(
     headers: dict[str, str],
     timeout: float,
     client: httpx.Client | None = None,
+    anonymous: bool = False,
+    accepted_statuses: tuple[int, ...] = (200,),
 ) -> Iterator[tuple[httpx.Response, dict[str, str]]]:
     checked_url(url)
     request_headers = checked_headers(headers)
@@ -59,6 +67,8 @@ def http_response(
         with connection as http:
             current_url = url
             for redirect in range(11):
+                if anonymous:
+                    http.cookies.clear()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise SourceError("媒体下载超过时间上限。")
@@ -79,6 +89,9 @@ def http_response(
                             }
                         current_url = next_url
                         continue
+                    if response.status_code in accepted_statuses:
+                        yield response, request_headers
+                        return
                     if response.status_code in {401, 403}:
                         raise AuthBudgetError("媒体地址拒绝访问或已经失效；未自动刷新或更换来源。")
                     response.raise_for_status()

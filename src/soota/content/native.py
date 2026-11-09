@@ -200,6 +200,18 @@ def capture_content(
     from soota.content.weir import supports as weir_supports
     from soota.providers.opencli_runtime import RuntimeUnavailable
 
+    if provider in {"auto", "http"}:
+        from urllib.parse import urlsplit
+
+        from soota.billing import selected_provider
+        from soota.wechat import HOST
+
+        if urlsplit(url).hostname == HOST:
+            from soota.providers.wechat import capture
+
+            selected_provider(settings, "http")
+            return capture(url)
+
     if provider == "weir":
         return capture_weir(settings, url, allow_credits=allow_credits)
     if provider not in {"auto", "opencli"}:

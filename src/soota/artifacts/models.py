@@ -1,10 +1,16 @@
+"""[INPUT]: 来源证据、根内产物路径与持久化 manifest。
+[OUTPUT]: v2 兼容模型及显式 raw_root/storage 的 v3 模型。
+[POS]: 原文包数据契约，不生成语义内容。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import hashlib
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SerializeAsAny, field_validator, model_validator
 
 from soota.models import ContentBundleManifest, SourceRef, TranscriptManifest, TranscriptStatus
 
@@ -97,17 +103,31 @@ class Artifact(BaseModel):
         return value
 
 
-class BundleV2(ContentBundleManifest):
-    schema_version: Literal[2] = 2
+class ArtifactV3(Artifact):
+    storage: Literal["raw", "control"]
+
+
+def artifact_storage(path: str, kind: str) -> Literal["raw", "control"]:
+    if path in {"content.json", "transcript.json", "context.md", "analysis.json", "analysis-request.json"}:
+        return "control"
+    return (
+        "raw"
+        if kind in {"body", "transcript", "transcript-original", "subtitle-export", "image", "audio", "video", "data"}
+        else "control"
+    )
+
+
+class Bundle(ContentBundleManifest):
+    schema_version: Literal[2, 3] = 2
     transcript: TranscriptManifest = Field(
         default_factory=lambda: TranscriptManifest(status=TranscriptStatus.NOT_REQUESTED)
     )
     content: ContentDocument | None = None
-    artifacts: list[Artifact] = Field(default_factory=list)
+    artifacts: list[SerializeAsAny[Artifact]] = Field(default_factory=list)
     context_fingerprint: str | None = None
 
     @model_validator(mode="after")
-    def unique_artifacts(self) -> BundleV2:
+    def unique_artifacts(self) -> Bundle:
         paths = [artifact.path for artifact in self.artifacts]
         if len(paths) != len(set(paths)):
             raise ValueError("产物路径重复。")
@@ -117,4 +137,43 @@ class BundleV2(ContentBundleManifest):
             relative_path(path)
         if self.content and self.content.source.cache_identity != self.source.cache_identity:
             raise ValueError("正文来源与内容包来源不一致。")
+        return self
+
+
+class BundleV2(Bundle):
+    schema_version: Literal[2] = 2
+
+
+class BundleV3(Bundle):
+    schema_version: Literal[3] = 3
+    raw_root: Path
+
+    @field_validator("raw_root")
+    @classmethod
+    def explicit_raw_root(cls, value: Path) -> Path:
+        if not value.is_absolute() or value.resolve() != value:
+            raise ValueError("v3 原件根必须是无符号链接或越界片段的绝对路径。")
+        return value
+
+    @field_validator("artifacts", mode="before")
+    @classmethod
+    def explicit_storage(cls, value: Any) -> list[ArtifactV3]:
+        if not isinstance(value, list):
+            raise ValueError("v3 artifacts 必须是数组。")
+        return [ArtifactV3.model_validate(a.model_dump() if isinstance(a, Artifact) else a) for a in value]
+
+    @model_validator(mode="after")
+    def registered_files(self) -> BundleV3:
+        tracked = {a.path for a in self.artifacts}
+        for artifact in self.artifacts:
+            if not isinstance(artifact, ArtifactV3) or artifact.storage != artifact_storage(
+                artifact.path, artifact.kind
+            ):
+                raise ValueError("v3 原始产物与控制产物的存储根不符合契约。")
+            if artifact.path == ".task.lock":
+                raise ValueError("产物不能使用任务锁路径。")
+        if set(self.files.values()) - tracked - {"manifest.json"}:
+            raise ValueError("v3 文件必须登记存储根、大小和 SHA-256。")
+        if self.transcript.path and self.transcript.path not in tracked:
+            raise ValueError("v3 字幕必须是已登记产物。")
         return self

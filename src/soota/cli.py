@@ -157,9 +157,9 @@ def estimate(
 
 @app.command()
 def catalog(
-    url: Annotated[str, typer.Argument(help="X、YouTube 频道或 Bilibili UP 主主页")],
+    url: Annotated[str, typer.Argument(help="X/YouTube/Bilibili 主页、微信合集 URL 或公众号 gh_xxx")],
     provider: Annotated[
-        str | None, typer.Option("--provider", help="auto/opencli-mcp/opencli/yt-dlp/tikhub/monid/treg")
+        str | None, typer.Option("--provider", help="auto/opencli-mcp/opencli/yt-dlp/tikhub/monid/treg/http")
     ] = None,
     fallback: Annotated[str | None, typer.Option("--fallback", help="显式允许 tikhub 兜底；仅已验证能力")] = None,
     max_items: Annotated[int, typer.Option("--max-items", help="本任务累计收录的条数上限")] = 100,

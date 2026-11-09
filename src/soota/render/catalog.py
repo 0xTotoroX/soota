@@ -1,3 +1,9 @@
+"""[INPUT]: 目录任务与累计预留。
+[OUTPUT]: 标准 catalog.json/catalog.md。
+[POS]: 目录输出，保留声明总数和完整性，不生成语义文章。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import html
@@ -37,6 +43,7 @@ def write_catalog(job: CatalogJob, reserved_cost: float) -> Path:
         "stop_reason": job.stop_reason,
         "incremental": job.incremental,
         "item_count": len(job.items),
+        "total_items": job.total_items,
         "pages_fetched": job.pages_fetched,
         "items": [item.model_dump(mode="json") for item in job.items],
         "processing": {
@@ -74,7 +81,7 @@ def write_catalog(job: CatalogJob, reserved_cost: float) -> Path:
             lines.extend(["", f"### {item.source.id}", "", _text(item.text), ""])
     cost_note = (
         "本次免费来源快照没有 TikHub API 费用。"
-        if job.provider in {"opencli", "opencli-mcp"}
+        if job.provider in {"opencli", "opencli-mcp", "http"}
         else f"请求预算已预留 {reserved_cost:g} USD；实际扣费以 TikHub 账单为准。"
     )
     lines.extend(["", cost_note, ""])

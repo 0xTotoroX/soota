@@ -48,7 +48,7 @@ def endpoint_chain(source: SourceRef, capability: str, name: str, endpoint: str 
     if endpoint:
         return [endpoint]
     if capability == "catalog":
-        return [catalog_endpoint(source)] if source.platform in {"youtube", "bilibili"} else []
+        return [catalog_endpoint(source)] if source.platform in {"youtube", "bilibili", "wechat_mp"} else []
     yt = source.platform == "youtube"
     if capability == "captions" and name == "monid" and yt:
         return [APIFY_CAPTIONS]

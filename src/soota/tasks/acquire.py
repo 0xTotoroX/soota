@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 from pydantic import ValidationError
 
 from soota.artifacts.bundle import content_from_markdown, load_bundle, load_transcript
-from soota.artifacts.models import ContentDocument
+from soota.artifacts.models import BundleV3, ContentDocument
 from soota.billing import PaymentGate, provider_enabled, selected_provider
 from soota.config import SootaSettings
 from soota.content.native import capture_content, capture_media, capture_operation, convert_content
@@ -205,7 +205,7 @@ def _collect_text(
             content=bundle.content,
             processing=bundle.processing,
             raw_body=bundle.content.body_md if bundle.content else None,
-            reference_base=str(Path(seed.value)),
+            reference_base=str(bundle.raw_root if isinstance(bundle, BundleV3) else Path(seed.value)),
         )
     if (
         seed.kind == "url"
@@ -357,6 +357,10 @@ def _collect_text(
         )
     )
     record: dict[str, Any] = {}
+    if native.operation == "wechat_mp.article":
+        record = native.raw
+        item.provenance["resolved_source"] = record["source"]
+        item.provenance["wechat"] = {key: value for key, value in record.items() if key not in {"html", "source"}}
     if isinstance(native.raw, list):
         if native.raw and isinstance(native.raw[0], dict) and "field" not in native.raw[0]:
             record = native.raw[0]
@@ -372,7 +376,12 @@ def _collect_text(
         except ValueError:
             item.provenance["published_label"] = published
     base = str(Path(record["saved"]).parent) if isinstance(record.get("saved"), str) else native.source_url
-    content = content_from_markdown(item.source, public_text(native.body), native.title, "unknown")
+    content = content_from_markdown(
+        item.source,
+        public_text(native.body),
+        native.title,
+        "full" if native.operation == "wechat_mp.article" else "unknown",
+    )
     return Collection(
         item,
         content=content,
@@ -401,15 +410,24 @@ def collect_text(
     ):
         from soota.transcripts.promotions import filter_promotions, parse_ranges
 
-        if seed.kind == "bundle" and (Path(seed.value) / "transcript.original.md").is_file():
-            from soota.artifacts.bundle import file_sha256
+        if seed.kind == "bundle":
+            from soota.artifacts.bundle import artifact_path, file_sha256
 
-            original_path = Path(seed.value) / "transcript.original.md"
             bundle = load_bundle(Path(seed.value))
             known = next((a for a in bundle.artifacts if a.path == "transcript.original.md"), None)
-            if known is not None and file_sha256(original_path) != known.sha256:
-                raise InputError("过滤前原文已被修改，未覆盖或自动继续过滤。")
-            result.document = parse_transcript_markdown(original_path.read_text(encoding="utf-8"), bundle.transcript)
+            original_path = (
+                artifact_path(Path(seed.value), bundle, "transcript.original.md")
+                if known is not None or not isinstance(bundle, BundleV3)
+                else None
+            )
+            if original_path is not None and original_path.is_file():
+                if known is not None and file_sha256(original_path) != known.sha256:
+                    raise InputError("过滤前原文已被修改，未覆盖或自动继续过滤。")
+                result.document = parse_transcript_markdown(
+                    original_path.read_text(encoding="utf-8"), bundle.transcript
+                )
+            elif isinstance(bundle, BundleV3) and known is not None:
+                raise InputError("过滤前原文缺失，未继续过滤。")
         result.original_document = result.document
         result.document, report, warnings = filter_promotions(
             result.item,

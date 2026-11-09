@@ -8,7 +8,7 @@
 - `atomic.py`：同目录临时文件、fsync 和原子替换。
 - `locking.py`：Unix flock／Windows LockFileEx，共享／排他以及阻塞／立即失败的跨进程内核锁。
 - `cache.py`：采集缓存读取、过期判断与保存。
-- `jobs.py`：任务记录与跨进程任务执行锁；统一任务的线程合并由 `tasks/state.py` 负责。
+- `jobs.py`：任务记录、绝对路径恢复绑定和跨进程任务执行锁；统一任务的线程合并由 `tasks/state.py` 负责。
 - `ledger.py`：请求费用流水记录。
 - `credit_budget.py`：跨任务／Key 的 UTC 自然月与任务累计 credits 预留、旧周期兼容、Key 名称归属、回执结算、异常计费停用与未决请求持久保留。
 - `task_budget.py`：全批持久化预算、线程与文件锁、请求前预留、排序用剩余额度快照、实付超价后的持久收费暂停，以及通过 contextvars 传递的活动任务身份。

@@ -143,7 +143,10 @@ class TikHubProvider:
     def list_items(self, source: SourceRef, cursor: str | None = None, *, page_size: int = 100) -> CatalogPage:
         path = catalog_endpoint(source)
         params = catalog_params(source, cursor, page_size, self.preferred_language)
-        payload = self._call(path, params, billed=True)
+        if source.platform == "wechat_mp":
+            payload = self._call(path, {}, billed=True, method="POST", json_body=params)
+        else:
+            payload = self._call(path, params, billed=True)
         return parse_catalog_page(source, payload, cursor, page_size)
 
     def endpoint_price(self, endpoint: ApiEndpoint, *, refresh: bool = False) -> float:

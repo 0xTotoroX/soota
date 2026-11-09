@@ -168,9 +168,11 @@ uv run soota catalog "频道或 UP 主 URL" --incremental --max-cost 0.004 --jso
 
 ## 输出与个人配置
 
+微信单篇默认使用匿名 HTTP 获取 `#js_content`，不依赖浏览器窗口；支持标题、公众号名、发布时间、稳定身份、页面合集、懒加载图片及代码块。`--want images` 携带 Referer 下载图片，`remote_deleted` 与 `verification_required` 分开报告。公开合集可免费分页，全号 `gh_xxx` 目录通过现有 TikHub 费用策略获取。用法见[微信单篇](docs/tasks.md#微信单篇匿名获取)与[微信目录](docs/catalog.md#微信公众号)。
+
 用户配置位于 `~/.config/soota/`，输出默认位于 `~/Documents/Soota/`。可通过 `SOOTA_OUTPUT_DIR` 或 `--output` 设置采集包位置。另行导出使用 `lorelab content export --bundle PATH --destination PATH`，或 `--vault PATH --subdir DIR`；导出维持相对附件链接并保护人工修改。Soota 不负责导出、定位知识库或选择分类。个人路径、账号选择和凭据从环境变量读取，不应把实际值写入项目或共享 Skill。名单、处理规则和采集结果保存在项目外的私人文件中。若知识库使用 Git，同样需要明确排除私人目录；详见[终端教程](docs/terminal-tutorial.md#个人资料与知识库规则)。
 
-新的统一任务使用 v2 内容包，`manifest.json` 的 `artifacts` 登记实际文件、类型、字节数、SHA-256、来源和验证信息。视频、音频、正文和字幕按实际目标保存；历史或 LoreLab 写入的分析字段与产物继续保留，未取得的产物不以空文件冒充。既有 v1 包仍可读取；原有单视频命令的输出契约保留。
+新的统一任务默认使用 v2 内容包；显式设置 `[storage].control_dir` 后使用 v3 分离原件与控制文件。`[storage].jobs_dir` 只改变新任务位置，全局账本和凭据位置保持不变。可通过 `[soota].preferences_file` 引用用户偏好 TOML，独立运行同样生效；环境变量优先，详情见[任务存储契约](docs/tasks.md#可选的分离存储)。`manifest.json` 的 `artifacts` 登记实际文件、类型、字节数、SHA-256、来源和验证信息。视频、音频、正文和字幕按实际目标保存；历史或 LoreLab 写入的分析字段与产物继续保留，未取得的产物不以空文件冒充。既有 v1 包仍可读取；原有单视频命令的输出契约保留。
 
 `context.md` 保存给 Agent 的原文输入，保留顺序、重复和断句。取得字幕时保存 `transcript.md`、片段 JSON 及请求的字幕导出；取得文章正文时保存 `body.md` 和有序正文块；媒体进入 `attachments/`。`note.md`、`outline.md`、`analysis.md` 和阅读用 `content.md` 由 LoreLab content 在明确请求并验证 Agent 提交后生成，Soota 采集不会重写它们。文件结构和旧包处理见 [内容包与导出](docs/tasks.md#内容包与导出)。
 

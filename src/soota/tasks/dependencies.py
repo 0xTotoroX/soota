@@ -36,6 +36,8 @@ def acquisition_goals(spec: TaskSpec, seed: InputSpec, files: list[Path] | None 
             native_images = Path(urlsplit(seed.value).path).suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}
     media = spec.wants & {"video", "audio"}
     text = spec.wants & {"context", "markdown", "transcript"}
+    if "data" in spec.wants and seed.kind == "url" and urlsplit(seed.value).hostname == "mp.weixin.qq.com":
+        text.add("data")
     if "images" in spec.wants:
         (media if native_images else text).add("images")
     return media, text

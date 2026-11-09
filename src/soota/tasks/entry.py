@@ -136,7 +136,8 @@ def ingest(
     # Keep the established single-video default command contract. Explicit
     # goals and new input types use the shared artifact task executor.
     legacy = (
-        want is None
+        settings.storage.control_dir is None
+        and want is None
         and optional is None
         and inputs_file is None
         and operation is None
@@ -270,6 +271,7 @@ def prepare_task(
             inputs=inputs,
             outputs=parse_outputs(want, optional),
             output=(output or settings.output_dir).expanduser().resolve(),
+            control_dir=settings.storage.control_dir.expanduser().resolve() if settings.storage.control_dir else None,
             provider=chosen,
             fallback=fallback,
             audio_provider=audio_provider,

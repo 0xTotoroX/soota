@@ -31,16 +31,25 @@ from soota.providers.ytdlp import YtDlpProvider
 from soota.providers.ytdlp import capabilities_for as ytdlp_capabilities
 from soota.storage.cache import CacheStore
 
-ProviderName = Literal["auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"]
+ProviderName = Literal["auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg", "http"]
 
 
 def validate_policy(provider: str, fallback: str | None, max_cost: float | None) -> None:
-    if provider not in {"auto", "opencli-mcp", "opencli", "yt-dlp", "tikhub", "monid", "treg"} or fallback not in {
+    if provider not in {
+        "auto",
+        "opencli-mcp",
+        "opencli",
+        "yt-dlp",
+        "tikhub",
+        "monid",
+        "treg",
+        "http",
+    } or fallback not in {
         None,
         "tikhub",
     }:
         raise InputError(
-            "--provider 支持 auto/opencli-mcp/opencli/yt-dlp/tikhub/monid/treg；--fallback 只支持 tikhub。"
+            "--provider 支持 auto/opencli-mcp/opencli/yt-dlp/tikhub/monid/treg/http；--fallback 只支持 tikhub。"
         )
     if fallback and provider == "tikhub":
         raise InputError("TikHub 已是指定来源，无需再指定同名 fallback。")
@@ -57,7 +66,13 @@ def catalog_provider(
     mcp_available: bool = False,
     settings: SootaSettings | None = None,
     max_cost: float | None = None,
-) -> Literal["opencli-mcp", "opencli", "tikhub", "monid", "treg"]:
+) -> Literal["opencli-mcp", "opencli", "tikhub", "monid", "treg", "http"]:
+    if source.platform == "wechat_mp" and source.kind == "album" and provider in {"auto", "http"}:
+        if settings is not None:
+            selected_provider(settings, "http")
+        return "http"
+    if provider == "http":
+        raise SourceError("HTTP 目录只支持微信公开合集。")
     if settings is not None and provider == "auto":
         names = [
             n
@@ -65,8 +80,8 @@ def catalog_provider(
                 ("opencli-mcp", mcp_available and mcp_capabilities(source).catalog),
                 ("opencli", opencli_capabilities(source).catalog),
                 ("tikhub", tikhub_capabilities(source).catalog),
-                ("monid", tikhub_capabilities(source).catalog),
-                ("treg", tikhub_capabilities(source).catalog),
+                ("monid", tikhub_capabilities(source).catalog and source.platform != "wechat_mp"),
+                ("treg", tikhub_capabilities(source).catalog and source.platform != "wechat_mp"),
             )
             if cap
         ]
@@ -79,6 +94,8 @@ def catalog_provider(
             raise SourceError("没有可用目录来源。")
         provider = ranked[0]
     if provider in {"monid", "treg"}:
+        if source.platform == "wechat_mp":
+            raise SourceError("微信公众号全号目录当前仅绑定 TikHub POST 契约。")
         if not tikhub_capabilities(source).catalog or provider == "treg" and source.platform != "youtube":
             raise SourceError(f"{provider} 尚未接入此目录契约。")
         return "treg" if provider == "treg" else "monid"

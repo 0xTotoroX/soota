@@ -1,3 +1,9 @@
+"""[INPUT]: 已登记目录来源和上游响应。
+[OUTPUT]: 接口参数与标准 CatalogPage。
+[POS]: YouTube/Bilibili/微信全号目录归一，不负责支付或个人状态。
+[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+"""
+
 from __future__ import annotations
 
 import re
@@ -11,6 +17,7 @@ from soota.providers.tikhub.registry import load_registry
 YOUTUBE_CHANNEL_ID = load_registry().resolve("youtube.web.get_channel_id").path
 YOUTUBE_CHANNEL_VIDEOS = load_registry().resolve("youtube.web.get_channel_videos").path
 BILIBILI_USER_VIDEOS = load_registry().resolve("bilibili.web.fetch_user_post_videos").path
+WECHAT_ACCOUNT_ARTICLES = load_registry().resolve("wechat_mp.fetch_account_articles").path
 
 
 def is_channel_id(value: str) -> bool:
@@ -18,6 +25,8 @@ def is_channel_id(value: str) -> bool:
 
 
 def catalog_endpoint(source: SourceRef) -> str:
+    if source.platform == "wechat_mp" and source.kind == "user":
+        return WECHAT_ACCOUNT_ARTICLES
     if source.platform == "youtube" and source.kind == "channel":
         return YOUTUBE_CHANNEL_VIDEOS
     if source.platform == "bilibili" and source.kind == "user":
@@ -27,6 +36,10 @@ def catalog_endpoint(source: SourceRef) -> str:
 
 def catalog_params(source: SourceRef, cursor: str | None, page_size: int, language: str) -> dict[str, Any]:
     catalog_endpoint(source)
+    if source.platform == "wechat_mp":
+        if cursor is not None and not re.fullmatch(r"[A-Za-z0-9+/=_-]{1,8192}", cursor):
+            raise ContractError("微信全号目录 offset 无效。")
+        return {"username": source.id, "page_size": min(page_size, 100), "offset": cursor or "", "raw": False}
     if source.platform == "youtube":
         params: dict[str, Any] = {"channel_id": source.id, "need_format": True, "language_code": language}
         if cursor is not None:
@@ -39,6 +52,8 @@ def catalog_params(source: SourceRef, cursor: str | None, page_size: int, langua
 
 def parse_catalog_page(source: SourceRef, payload: Any, cursor: str | None, page_size: int) -> CatalogPage:
     data = unwrap(payload)
+    if source.platform == "wechat_mp":
+        return _wechat_page(source, data)
     if source.platform == "youtube":
         return _youtube_page(source, data)
     return _bilibili_page(data, int(cursor or "1"), page_size)
@@ -114,3 +129,22 @@ def _bilibili_page(data: dict[str, Any], page_number: int, page_size: int) -> Ca
         items.append(bilibili_media(_video_source("bilibili", row.get("bvid")), row))
     next_cursor = str(page_number + 1) if rows and page_number * page_size < total else None
     return CatalogPage(items=items, next_cursor=next_cursor, total_items=total)
+
+
+def _wechat_page(source: SourceRef, data: dict[str, Any]) -> CatalogPage:
+    from soota.wechat import catalog_item
+
+    if data.get("biz_username") != source.id or not isinstance(data.get("articles"), list):
+        raise ContractError("微信全号目录缺少 articles 或返回了其他账号。")
+    end, cursor = data.get("is_end"), data.get("next_offset")
+    if type(end) not in (int, bool) or end not in (0, 1):
+        raise ContractError("微信全号目录缺少明确 is_end。")
+    if not end and (not isinstance(cursor, str) or not re.fullmatch(r"[A-Za-z0-9+/=_-]{1,8192}", cursor)):
+        raise ContractError("微信全号目录缺少下一页 offset。")
+    rows = data["articles"]
+    if not end and not rows:
+        raise ContractError("微信全号目录尚未结束却返回空页。")
+    if type(data.get("count")) is not int or data["count"] != len(rows):
+        raise ContractError("微信全号目录 count 与 articles 不一致。")
+    items = [catalog_item(row, username=source.id) for row in rows]
+    return CatalogPage(items=items, next_cursor=None if end else cursor)

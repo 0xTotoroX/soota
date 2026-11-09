@@ -15,7 +15,16 @@ from threading import RLock
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from soota.config import PriorityRule
 from soota.models import TranscriptMode
@@ -68,6 +77,7 @@ class TaskSpec(BaseModel):
     inputs: list[InputSpec] = Field(min_length=1)
     outputs: list[OutputSpec] = Field(min_length=1)
     output: Path
+    control_dir: Path | None = None
     provider: str = "auto"
     fallback: str | None = None
     audio_provider: str | None = None
@@ -95,6 +105,14 @@ class TaskSpec(BaseModel):
     vault: Path | None = None
     subdir: str = "Soota"
 
+    @model_serializer(mode="wrap")
+    def serialize_storage(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.control_dir is None:
+            # 旧请求不新增空字段，仍可由历史版本按原契约读取。
+            data.pop("control_dir", None)
+        return data
+
     @property
     def wants(self) -> set[str]:
         return {output.kind for output in self.outputs}
@@ -118,6 +136,12 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_task(self) -> TaskSpec:
+        if self.control_dir is not None:
+            raw, control = self.output.resolve(), self.control_dir.resolve()
+            if not self.output.is_absolute() or not self.control_dir.is_absolute():
+                raise ValueError("分离存储需要显式的绝对原件根和控制根")
+            if raw.is_relative_to(control) or control.is_relative_to(raw):
+                raise ValueError("原件根和控制根必须独立")
         if len(self.outputs) != len(self.wants):
             raise ValueError("duplicate output kinds")
         if self.provider not in {

@@ -6,6 +6,7 @@ import re
 import shutil
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from soota.models import (
 from soota.providers.opencli_runtime import RuntimeUnavailable
 from soota.providers.process import run_process
 from soota.routing import recognize
+from soota.secrets import redact_any
 from soota.storage.cache import CacheStore
 
 CAPTION_FORMAT_PREFERENCE = ("json3", "vtt", "ttml", "srv3", "srv2", "srv1", "srt", "xml", "txt")
@@ -171,6 +173,13 @@ class YtDlpProvider:
                 creator=info.get("channel") or info.get("uploader"),
                 duration_seconds=int(info["duration"]) if info.get("duration") is not None else None,
                 language=info.get("language"),
+                published_at=(datetime.strptime(info["upload_date"], "%Y%m%d").replace(tzinfo=UTC)
+                              if info.get("upload_date") else None),
+                extras={key: str(redact_any(str(value))) for key, value in {
+                    "description": info.get("description"), "channelId": info.get("channel_id"),
+                    "channel_url": info.get("channel_url"), "uploader_id": info.get("uploader_id"),
+                    "uploader_url": info.get("uploader_url"),
+                }.items() if value is not None},
                 provenance={
                     "provider": self.name,
                     "engine": "yt-dlp",

@@ -19,14 +19,16 @@ from typing import Any
 from pydantic import ValidationError
 
 from soota.artifacts.bundle import (
+    artifact_path,
     file_sha256,
     load_bundle,
+    safe_path,
     save_bundle,
     verify_artifacts,
     write_artifact,
     write_bundle,
 )
-from soota.artifacts.models import BundleV2
+from soota.artifacts.models import Bundle, BundleV3
 from soota.config import SootaSettings
 from soota.errors import AuthBudgetError, InputError, SootaError, SourceError, StorageError
 from soota.media import MediaAsset, MediaService
@@ -34,7 +36,7 @@ from soota.models import CommandResult, MediaItem, ProcessingManifest, Transcrip
 from soota.providers.quotes import online_prices
 from soota.secrets import redact_any
 from soota.storage.atomic import atomic_write
-from soota.storage.jobs import JobStore
+from soota.storage.jobs import JobStore, bind_job
 from soota.storage.task_budget import TaskBudget, task_budget_scope
 from soota.tasks.acquire import collect_media, collect_text, native_operation, safe_item
 from soota.tasks.enumeration import expand_inputs
@@ -54,13 +56,15 @@ from soota.tasks.state import (
 )
 
 
-def _folder(spec: TaskSpec, seed: InputSpec) -> Path:
+def _folder(spec: TaskSpec, seed: InputSpec, *, raw: bool = False) -> Path:
     if seed.kind == "bundle":
         return Path(seed.value)
     source = source_for(seed)
     platform = re.sub(r"[^A-Za-z0-9._-]", "_", source.platform)
     ident = re.sub(r"[^A-Za-z0-9_-]", "_", source.id)
-    return spec.output / platform / ident
+    if spec.control_dir is None:
+        return spec.output / platform / ident
+    return safe_path(spec.output if raw else spec.control_dir, f"{platform}/{ident}")
 
 
 def _error(exc: SootaError | OSError) -> dict[str, Any]:
@@ -89,17 +93,17 @@ def _step(settings: SootaSettings, job: TaskJob, row: TaskItem, name: str, actio
         return None
 
 
-def _valid(folder: Path, bundle: BundleV2, kind: str) -> list[Any]:
+def _valid(folder: Path, bundle: Bundle, kind: str) -> list[Any]:
     return [
         a
         for a in bundle.artifacts
-        if a.kind == kind and (folder / a.path).is_file() and file_sha256(folder / a.path) == a.sha256
+        if a.kind == kind
+        and artifact_path(folder, bundle, a.path).is_file()
+        and file_sha256(artifact_path(folder, bundle, a.path)) == a.sha256
     ]
 
 
-def _media_artifact(
-    folder: Path, bundle: BundleV2, asset: MediaAsset, index: int, spec: TaskSpec, row: TaskItem
-) -> None:
+def _media_artifact(folder: Path, bundle: Bundle, asset: MediaAsset, index: int, spec: TaskSpec, row: TaskItem) -> None:
     suffix = asset.path.suffix or (".m4a" if asset.kind == "audio" else ".bin")
     path = f"attachments/{asset.kind}-{index:03d}{suffix}"
     details = {
@@ -138,7 +142,7 @@ def _cache_matches(artifact: Any, spec: TaskSpec, row: TaskItem) -> bool:
     )
 
 
-def _has_transcript(bundle: BundleV2, spec: TaskSpec) -> bool:
+def _has_transcript(bundle: Bundle, spec: TaskSpec) -> bool:
     if bundle.transcript.status.value != "ready" or bundle.transcript.segments < 1:
         return False
     if spec.transcript_mode == TranscriptMode.ASR and bundle.transcript.source != TranscriptSource.ASR:
@@ -152,15 +156,15 @@ def _has_transcript(bundle: BundleV2, spec: TaskSpec) -> bool:
     return True
 
 
-def _has_source(bundle: BundleV2, spec: TaskSpec) -> bool:
+def _has_source(bundle: Bundle, spec: TaskSpec) -> bool:
     return bool(bundle.content is not None and bundle.content.has_text) or _has_transcript(bundle, spec)
 
 
-def _source_current(folder: Path, bundle: BundleV2, spec: TaskSpec, row: TaskItem) -> bool:
+def _source_current(folder: Path, bundle: Bundle, spec: TaskSpec, row: TaskItem) -> bool:
     return _has_source(bundle, spec) and any(_cache_matches(a, spec, row) for a in _valid(folder, bundle, "context"))
 
 
-def _satisfied(folder: Path, bundle: BundleV2, goal: str, spec: TaskSpec, row: TaskItem) -> bool:
+def _satisfied(folder: Path, bundle: Bundle, goal: str, spec: TaskSpec, row: TaskItem) -> bool:
     if goal in {"context", "markdown"}:
         return _source_current(folder, bundle, spec, row)
     if goal == "transcript":
@@ -168,9 +172,11 @@ def _satisfied(folder: Path, bundle: BundleV2, goal: str, spec: TaskSpec, row: T
             _source_current(folder, bundle, spec, row)
             and _has_transcript(bundle, spec)
             and all(
-                (folder / f"captions.{fmt}").is_file()
-                and any(
-                    a.path == f"captions.{fmt}" and a.sha256 == file_sha256(folder / a.path) for a in bundle.artifacts
+                any(
+                    a.path == f"captions.{fmt}"
+                    and artifact_path(folder, bundle, a.path).is_file()
+                    and a.sha256 == file_sha256(artifact_path(folder, bundle, a.path))
+                    for a in bundle.artifacts
                 )
                 for fmt in spec.subtitle_formats
             )
@@ -216,7 +222,12 @@ def _run_item_locked(
     work = task_folder(settings, job.id) / row.item_id
     work.mkdir(parents=True, exist_ok=True)
     item = safe_item(MediaItem(source=source_for(seed)))
-    bundle = load_bundle(folder) if (folder / "manifest.json").is_file() else write_bundle(folder, item)
+    raw_root = _folder(spec, seed, raw=True) if spec.control_dir is not None and seed.kind != "bundle" else None
+    bundle = (
+        load_bundle(folder) if (folder / "manifest.json").is_file() else write_bundle(folder, item, raw_root=raw_root)
+    )
+    if raw_root is not None and (not isinstance(bundle, BundleV3) or bundle.raw_root != raw_root.resolve()):
+        raise InputError("已有包的存储根与冻结请求不一致，未移动或改写原件。")
     issues = verify_artifacts(folder, bundle)
     if issues:
         row.warnings = list(dict.fromkeys([*row.warnings, *issues]))
@@ -261,7 +272,11 @@ def _run_item_locked(
         if _satisfied(folder, bundle, kind, spec, row):
             for artifact in _valid(folder, bundle, kind):
                 if artifact.attributes.get("verification"):
-                    assets.append(MediaAsset.model_validate({**artifact.attributes, "path": folder / artifact.path}))
+                    assets.append(
+                        MediaAsset.model_validate(
+                            {**artifact.attributes, "path": artifact_path(folder, bundle, artifact.path)}
+                        )
+                    )
     media_goals, text_goals = acquisition_goals(spec, seed, operation.files if operation else None)
     previous_media = {goal for goal in media_goals if _satisfied(folder, bundle, goal, spec, row)}
     if media_goals - previous_media:
@@ -469,6 +484,7 @@ def _run_item_locked(
             "context": str(folder / "context.md") if (folder / "context.md").is_file() else None,
             "manifest": str(folder / "manifest.json"),
             "output": str(folder),
+            **({"raw": str(bundle.raw_root)} if isinstance(bundle, BundleV3) else {}),
         }
     )
     if not missing and not any(error["step"] == "export" for error in row.errors):
@@ -564,6 +580,8 @@ def execute(
                     break
 
                 def acquire_stage(row: TaskItem, stage: TaskSpec = stage) -> None:
+                    if not stage.force and any(error.get("code") == "remote_deleted" for error in row.errors):
+                        return
                     _execute_item(settings, stage, job, row, inputs[row.input_index])
 
                 run_items(
@@ -669,6 +687,8 @@ def resume(
     if workers is not None and (type(workers) is not int or not 1 <= workers <= 8):
         raise InputError("workers 必须为 1–8 的整数。")
     from soota.workflow_compat import invoke, job_needs_workflow
+
+    settings, job_id = bind_job(settings, job_id)
 
     if analysis is not None or job_needs_workflow(settings, job_id):
         return invoke(
